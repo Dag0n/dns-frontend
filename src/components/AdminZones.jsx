@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { apiRequest } from "../api";
 
-export default function AdminZones({ token }) {
+export default function AdminZones({ token, onEditZone }) {
   const [zones, setZones] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -65,6 +65,25 @@ export default function AdminZones({ token }) {
       setMessage("Zone created and assigned successfully.");
       setCreateEmail("");
       setCreateZoneName("");
+      await loadZones();
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const handleDelete = async (zoneName) => {
+    if (!confirm(`Are you sure you want to delete the zone "${zoneName}"? This will remove it from PowerDNS and the database. This action cannot be undone.`)) {
+      return;
+    }
+
+    setError("");
+    setMessage("");
+    try {
+      await apiRequest(`/admin/zones/${encodeURIComponent(zoneName)}`, {
+        method: "DELETE",
+        token,
+      });
+      setMessage(`Zone "${zoneName}" deleted successfully.`);
       await loadZones();
     } catch (err) {
       setError(err.message);
@@ -155,18 +174,59 @@ export default function AdminZones({ token }) {
               <tr>
                 <th>Zone</th>
                 <th>Owner</th>
+                <th>Managers</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
               {zones.map((z) => (
                 <tr key={z.id}>
-                  <td>{z.name}</td>
+                  <td><code>{z.name}</code></td>
                   <td>{z.owner_email || <em>Unassigned</em>}</td>
+                  <td>
+                    {z.managers && z.managers.length > 0 ? (
+                      <div style={{ fontSize: "13px" }}>
+                        {z.managers.map((m) => (
+                          <div key={m.id}>{m.email}</div>
+                        ))}
+                      </div>
+                    ) : (
+                      <em>None</em>
+                    )}
+                  </td>
+                  <td>
+                    <div style={{ display: "flex", gap: "8px" }}>
+                      <button
+                        className="btn btn-secondary"
+                        onClick={() => onEditZone && onEditZone(z.name)}
+                        style={{ fontSize: "13px", padding: "4px 12px" }}
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                        </svg>
+                        Edit
+                      </button>
+                      <button
+                        className="btn btn-ghost"
+                        onClick={() => handleDelete(z.name)}
+                        style={{ fontSize: "13px", padding: "4px 12px", color: "var(--danger)" }}
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <polyline points="3 6 5 6 21 6"/>
+                          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                          <line x1="10" y1="11" x2="10" y2="17"/>
+                          <line x1="14" y1="11" x2="14" y2="17"/>
+                        </svg>
+                        Delete
+                      </button>
+                    </div>
+                  </td>
                 </tr>
               ))}
               {zones.length === 0 && !loading && (
                 <tr>
-                  <td colSpan="2">
+                  <td colSpan="4">
                     <span className="muted">No zones in database.</span>
                   </td>
                 </tr>
