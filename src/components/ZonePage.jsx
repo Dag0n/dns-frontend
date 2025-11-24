@@ -109,7 +109,7 @@ function simpleToRrsets(simple, zoneName, defaultTtl = 3600) {
   return rrsets;
 }
 
-export default function ZonePage({ token, zoneName, onBack }) {
+export default function ZonePage({ token, zoneName, onBack, isAdminEdit = false }) {
   const [tab, setTab] = useState("basic"); // "basic" | "advanced"
   const [loading, setLoading] = useState(true);
 
@@ -133,7 +133,8 @@ export default function ZonePage({ token, zoneName, onBack }) {
     setMessage("");
 
     try {
-      const data = await apiRequest(`/zones/${zoneName}`, { token });
+      const endpoint = isAdminEdit ? `/admin/zones/${zoneName}/details` : `/zones/${zoneName}`;
+      const data = await apiRequest(endpoint, { token });
 
       // delegation
       setDelegationMode(data.delegation?.mode || "internal");
@@ -181,7 +182,10 @@ export default function ZonePage({ token, zoneName, onBack }) {
     }
 
     try {
-      await apiRequest(`/zones/${zoneName}/delegation`, {
+      const endpoint = isAdminEdit
+        ? `/admin/zones/${zoneName}/delegation`
+        : `/zones/${zoneName}/delegation`;
+      await apiRequest(endpoint, {
         method: "PUT",
         token,
         body: { mode: delegationMode, externalNs },
@@ -245,7 +249,10 @@ export default function ZonePage({ token, zoneName, onBack }) {
 
     try {
       const rrsets = simpleToRrsets(simple, zoneName, Number(ttl) || 3600);
-      await apiRequest(`/zones/${zoneName}/records`, {
+      const endpoint = isAdminEdit
+        ? `/admin/zones/${zoneName}/records`
+        : `/zones/${zoneName}/records`;
+      await apiRequest(endpoint, {
         method: "PUT",
         token,
         body: { rrsets },
@@ -282,7 +289,10 @@ export default function ZonePage({ token, zoneName, onBack }) {
     }
 
     try {
-      await apiRequest(`/zones/${zoneName}/records`, {
+      const endpoint = isAdminEdit
+        ? `/admin/zones/${zoneName}/records`
+        : `/zones/${zoneName}/records`;
+      await apiRequest(endpoint, {
         method: "PUT",
         token,
         body: { rrsets: parsed },
