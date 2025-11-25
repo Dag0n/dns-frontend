@@ -18,93 +18,179 @@ function hostToFqdn(host, zoneName) {
   return `${trimmed}.${zoneName}.`;
 }
 
+function ensureFqdn(value) {
+  const trimmed = value.trim();
+  if (!trimmed) return trimmed;
+  if (trimmed.endsWith(".")) return trimmed;
+  return trimmed + ".";
+}
+
 function rrsetsToSimple(rrsets, zoneName) {
-  const A = [];
-  const CNAME = [];
-  const MX = [];
+  const records = [];
   const other = [];
 
   (rrsets || []).forEach((rr) => {
     const host = fqdnToHost(rr.name, zoneName);
-    if (rr.type === "A") {
-      rr.records.forEach((r) => A.push({ host, value: r.content }));
-    } else if (rr.type === "CNAME") {
-      rr.records.forEach((r) => CNAME.push({ host, value: r.content }));
-    } else if (rr.type === "MX") {
+
+    // Simple types (just value)
+    if (["A", "AAAA", "CNAME", "TXT", "PTR"].includes(rr.type)) {
+      rr.records.forEach((r) =>
+        records.push({ type: rr.type, host, value: r.content })
+      );
+    }
+    // MX records (priority + target)
+    else if (rr.type === "MX") {
       rr.records.forEach((r) => {
         const parts = r.content.trim().split(/\s+/);
         const priority = parts[0] || "10";
         const target = parts.slice(1).join(" ") || "";
-        MX.push({ host, priority, value: target });
+        records.push({ type: "MX", host, priority, value: target });
       });
-    } else {
+    }
+    // SRV records (priority, weight, port, target)
+    else if (rr.type === "SRV") {
+      rr.records.forEach((r) => {
+        const parts = r.content.trim().split(/\s+/);
+        const priority = parts[0] || "0";
+        const weight = parts[1] || "0";
+        const port = parts[2] || "0";
+        const target = parts.slice(3).join(" ") || "";
+        records.push({ type: "SRV", host, priority, weight, port, value: target });
+      });
+    }
+    // CAA records (flags, tag, value)
+    else if (rr.type === "CAA") {
+      rr.records.forEach((r) => {
+        const parts = r.content.trim().split(/\s+/);
+        const flags = parts[0] || "0";
+        const tag = parts[1] || "issue";
+        const caaValue = parts.slice(2).join(" ").replace(/^"(.*)"$/, '$1') || "";
+        records.push({ type: "CAA", host, flags, tag, value: caaValue });
+      });
+    }
+    // CERT records (type, key-tag, algorithm, certificate)
+    else if (rr.type === "CERT") {
+      rr.records.forEach((r) => {
+        const parts = r.content.trim().split(/\s+/);
+        const certType = parts[0] || "0";
+        const keyTag = parts[1] || "0";
+        const algorithm = parts[2] || "0";
+        const certificate = parts.slice(3).join(" ") || "";
+        records.push({ type: "CERT", host, certType, keyTag, algorithm, value: certificate });
+      });
+    }
+    // DNSKEY records (flags, protocol, algorithm, public-key)
+    else if (rr.type === "DNSKEY") {
+      rr.records.forEach((r) => {
+        const parts = r.content.trim().split(/\s+/);
+        const flags = parts[0] || "256";
+        const protocol = parts[1] || "3";
+        const algorithm = parts[2] || "8";
+        const publicKey = parts.slice(3).join(" ") || "";
+        records.push({ type: "DNSKEY", host, flags, protocol, algorithm, value: publicKey });
+      });
+    }
+    // DS records (key-tag, algorithm, digest-type, digest)
+    else if (rr.type === "DS") {
+      rr.records.forEach((r) => {
+        const parts = r.content.trim().split(/\s+/);
+        const keyTag = parts[0] || "0";
+        const algorithm = parts[1] || "8";
+        const digestType = parts[2] || "2";
+        const digest = parts.slice(3).join(" ") || "";
+        records.push({ type: "DS", host, keyTag, algorithm, digestType, value: digest });
+      });
+    }
+    // Simple raw content types (HTTPS, SVCB, LOC, NAPTR, OPENPGPKEY, SMIMEA, SSHFP, TLSA, URI)
+    else if (["HTTPS", "SVCB", "LOC", "NAPTR", "OPENPGPKEY", "SMIMEA", "SSHFP", "TLSA", "URI"].includes(rr.type)) {
+      rr.records.forEach((r) =>
+        records.push({ type: rr.type, host, value: r.content })
+      );
+    }
+    // Everything else goes to "other" for advanced mode
+    else {
       other.push(rr);
     }
   });
 
-  return { A, CNAME, MX, other };
+  return { records, other };
 }
 
 function simpleToRrsets(simple, zoneName, defaultTtl = 3600) {
   const rrsets = [...simple.other];
 
-  if (simple.A.length > 0) {
-    const byHost = {};
-    simple.A.forEach(({ host, value }) => {
-      if (!value) return;
-      const key = hostToFqdn(host, zoneName);
-      if (!byHost[key]) byHost[key] = [];
-      byHost[key].push({ content: value.trim(), disabled: false });
-    });
-    Object.entries(byHost).forEach(([name, records]) => {
-      rrsets.push({
-        name,
-        type: "A",
-        ttl: defaultTtl,
-        records,
-        comments: [],
-      });
-    });
-  }
+  // Group records by type and host
+  const byTypeAndHost = {};
 
-  if (simple.CNAME.length > 0) {
-    const byHost = {};
-    simple.CNAME.forEach(({ host, value }) => {
-      if (!value) return;
-      const key = hostToFqdn(host, zoneName);
-      byHost[key] = { content: value.trim(), disabled: false };
-    });
-    Object.entries(byHost).forEach(([name, record]) => {
-      rrsets.push({
-        name,
-        type: "CNAME",
-        ttl: defaultTtl,
-        records: [record],
-        comments: [],
-      });
-    });
-  }
+  simple.records.forEach((record) => {
+    if (!record.value) return;
 
-  if (simple.MX.length > 0) {
-    const byHost = {};
-    simple.MX.forEach(({ host, priority, value }) => {
-      if (!value) return;
-      const key = hostToFqdn(host, zoneName);
-      if (!byHost[key]) byHost[key] = [];
-      const prio = String(priority || "10").trim();
-      const tgt = value.trim();
-      byHost[key].push({ content: `${prio} ${tgt}`, disabled: false });
+    const key = `${record.type}||${hostToFqdn(record.host, zoneName)}`;
+    if (!byTypeAndHost[key]) {
+      byTypeAndHost[key] = {
+        type: record.type,
+        name: hostToFqdn(record.host, zoneName),
+        records: [],
+      };
+    }
+
+    let content;
+    switch (record.type) {
+      case "A":
+      case "AAAA":
+      case "TXT":
+        content = record.value.trim();
+        break;
+      case "CNAME":
+      case "PTR":
+        content = ensureFqdn(record.value);
+        break;
+      case "MX":
+        content = `${String(record.priority || "10").trim()} ${ensureFqdn(record.value)}`;
+        break;
+      case "SRV":
+        content = `${String(record.priority || "0").trim()} ${String(record.weight || "0").trim()} ${String(record.port || "0").trim()} ${ensureFqdn(record.value)}`;
+        break;
+      case "CAA":
+        content = `${String(record.flags || "0").trim()} ${record.tag || "issue"} "${record.value.trim()}"`;
+        break;
+      case "CERT":
+        content = `${String(record.certType || "0").trim()} ${String(record.keyTag || "0").trim()} ${String(record.algorithm || "0").trim()} ${record.value.trim()}`;
+        break;
+      case "DNSKEY":
+        content = `${String(record.flags || "256").trim()} ${String(record.protocol || "3").trim()} ${String(record.algorithm || "8").trim()} ${record.value.trim()}`;
+        break;
+      case "DS":
+        content = `${String(record.keyTag || "0").trim()} ${String(record.algorithm || "8").trim()} ${String(record.digestType || "2").trim()} ${record.value.trim()}`;
+        break;
+      case "HTTPS":
+      case "SVCB":
+      case "LOC":
+      case "NAPTR":
+      case "OPENPGPKEY":
+      case "SMIMEA":
+      case "SSHFP":
+      case "TLSA":
+      case "URI":
+        content = record.value.trim();
+        break;
+      default:
+        content = record.value.trim();
+    }
+
+    byTypeAndHost[key].records.push({ content, disabled: false });
+  });
+
+  // Convert to rrsets
+  Object.values(byTypeAndHost).forEach(({ type, name, records }) => {
+    rrsets.push({
+      name,
+      type,
+      ttl: defaultTtl,
+      records,
+      comments: [],
     });
-    Object.entries(byHost).forEach(([name, records]) => {
-      rrsets.push({
-        name,
-        type: "MX",
-        ttl: defaultTtl,
-        records,
-        comments: [],
-      });
-    });
-  }
+  });
 
   return rrsets;
 }
@@ -119,7 +205,7 @@ export default function ZonePage({ token, zoneName, onBack, isAdminEdit = false 
 
   // Records
   const [hasInternalZone, setHasInternalZone] = useState(true);
-  const [simple, setSimple] = useState({ A: [], CNAME: [], MX: [], other: [] });
+  const [simple, setSimple] = useState({ records: [], other: [] });
   const [ttl, setTtl] = useState(3600);
   const [rrsetsText, setRrsetsText] = useState("[]");
 
@@ -198,41 +284,26 @@ export default function ZonePage({ token, zoneName, onBack, isAdminEdit = false 
   };
 
   // Basic editor handlers
-  const handleAddRow = (type) => {
-    if (type === "A") {
-      setSimple((prev) => ({
-        ...prev,
-        A: [...prev.A, { host: "@", value: "" }],
-      }));
-    } else if (type === "CNAME") {
-      setSimple((prev) => ({
-        ...prev,
-        CNAME: [...prev.CNAME, { host: "www", value: "" }],
-      }));
-    } else if (type === "MX") {
-      setSimple((prev) => ({
-        ...prev,
-        MX: [...prev.MX, { host: "@", priority: "10", value: "" }],
-      }));
-    }
+  const handleAddRow = () => {
+    setSimple((prev) => ({
+      ...prev,
+      records: [...prev.records, { type: "A", host: "@", value: "" }],
+    }));
   };
 
-  const handleUpdateRow = (type, index, field, value) => {
+  const handleUpdateRow = (index, field, value) => {
     setSimple((prev) => {
-      const copy = { ...prev };
-      const arr = [...copy[type]];
-      arr[index] = { ...arr[index], [field]: value };
-      copy[type] = arr;
-      return copy;
+      const records = [...prev.records];
+      records[index] = { ...records[index], [field]: value };
+      return { ...prev, records };
     });
   };
 
-  const handleDeleteRow = (type, index) => {
-    setSimple((prev) => {
-      const copy = { ...prev };
-      copy[type] = copy[type].filter((_, i) => i !== index);
-      return copy;
-    });
+  const handleDeleteRow = (index) => {
+    setSimple((prev) => ({
+      ...prev,
+      records: prev.records.filter((_, i) => i !== index),
+    }));
   };
 
   const handleSaveBasic = async (e) => {
@@ -415,228 +486,552 @@ export default function ZonePage({ token, zoneName, onBack, isAdminEdit = false 
                 </p>
               </div>
 
-              {/* A records */}
-              <h3>A records</h3>
+              <h3>DNS Records</h3>
               <p className="muted">
-                Use <code>@</code> for the root of the zone, or{" "}
-                <code>www</code>, <code>mail</code> etc. IP addresses must be
-                IPv4.
+                Add DNS records for your zone. Select the record type and fill in
+                the required fields. Use <code>@</code> for the zone root.
               </p>
-              <table className="zones-table" style={{ marginBottom: 14 }}>
-                <thead>
-                  <tr>
-                    <th>Host</th>
-                    <th>IPv4 address</th>
-                    <th style={{ width: 70 }}></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {simple.A.map((row, i) => (
-                    <tr key={`A-${i}`}>
-                      <td>
-                        <input
-                          type="text"
-                          value={row.host}
-                          onChange={(e) =>
-                            handleUpdateRow("A", i, "host", e.target.value)
-                          }
-                          placeholder="@"
-                          disabled={recordsDisabled}
-                        />
-                      </td>
-                      <td>
-                        <input
-                          type="text"
-                          value={row.value}
-                          onChange={(e) =>
-                            handleUpdateRow("A", i, "value", e.target.value)
-                          }
-                          placeholder="157.231.244.198"
-                          disabled={recordsDisabled}
-                        />
-                      </td>
-                      <td>
-                        <button
-                          type="button"
-                          className="btn btn-ghost"
-                          onClick={() => handleDeleteRow("A", i)}
-                          disabled={recordsDisabled}
-                        >
-                          ✕
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                  {simple.A.length === 0 && (
-                    <tr>
-                      <td colSpan="3">
-                        <span className="muted">No A records yet.</span>
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={() => handleAddRow("A")}
-                style={{ marginBottom: 16 }}
-                disabled={recordsDisabled}
-              >
-                + Add A record
-              </button>
 
-              {/* CNAME */}
-              <h3>CNAME records</h3>
-              <p className="muted">
-                Alias one host to another (e.g. <code>www</code> →{" "}
-                <code>parish.example.net.</code>).
-              </p>
-              <table className="zones-table" style={{ marginBottom: 14 }}>
-                <thead>
-                  <tr>
-                    <th>Host</th>
-                    <th>Target (hostname)</th>
-                    <th style={{ width: 70 }}></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {simple.CNAME.map((row, i) => (
-                    <tr key={`CNAME-${i}`}>
-                      <td>
-                        <input
-                          type="text"
-                          value={row.host}
-                          onChange={(e) =>
-                            handleUpdateRow("CNAME", i, "host", e.target.value)
-                          }
-                          placeholder="www"
-                          disabled={recordsDisabled}
-                        />
-                      </td>
-                      <td>
-                        <input
-                          type="text"
-                          value={row.value}
-                          onChange={(e) =>
-                            handleUpdateRow("CNAME", i, "value", e.target.value)
-                          }
-                          placeholder="example.net."
-                          disabled={recordsDisabled}
-                        />
-                      </td>
-                      <td>
-                        <button
-                          type="button"
-                          className="btn btn-ghost"
-                          onClick={() => handleDeleteRow("CNAME", i)}
-                          disabled={recordsDisabled}
-                        >
-                          ✕
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                  {simple.CNAME.length === 0 && (
+              <div style={{ overflowX: "auto" }}>
+                <table className="zones-table" style={{ marginBottom: 14 }}>
+                  <thead>
                     <tr>
-                      <td colSpan="3">
-                        <span className="muted">No CNAME records yet.</span>
-                      </td>
+                      <th style={{ minWidth: 100 }}>Type</th>
+                      <th style={{ minWidth: 120 }}>Host</th>
+                      <th style={{ minWidth: 200 }}>Value</th>
+                      <th style={{ width: 70 }}></th>
                     </tr>
-                  )}
-                </tbody>
-              </table>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={() => handleAddRow("CNAME")}
-                style={{ marginBottom: 16 }}
-                disabled={recordsDisabled}
-              >
-                + Add CNAME record
-              </button>
+                  </thead>
+                  <tbody>
+                    {simple.records.map((row, i) => {
+                      const renderFields = () => {
+                        switch (row.type) {
+                          case "A":
+                            return (
+                              <input
+                                type="text"
+                                value={row.value || ""}
+                                onChange={(e) =>
+                                  handleUpdateRow(i, "value", e.target.value)
+                                }
+                                placeholder="192.0.2.1"
+                                disabled={recordsDisabled}
+                                style={{ width: "100%" }}
+                              />
+                            );
+                          case "AAAA":
+                            return (
+                              <input
+                                type="text"
+                                value={row.value || ""}
+                                onChange={(e) =>
+                                  handleUpdateRow(i, "value", e.target.value)
+                                }
+                                placeholder="2001:db8::1"
+                                disabled={recordsDisabled}
+                                style={{ width: "100%" }}
+                              />
+                            );
+                          case "CNAME":
+                            return (
+                              <input
+                                type="text"
+                                value={row.value || ""}
+                                onChange={(e) =>
+                                  handleUpdateRow(i, "value", e.target.value)
+                                }
+                                placeholder="target.example.com."
+                                disabled={recordsDisabled}
+                                style={{ width: "100%" }}
+                              />
+                            );
+                          case "MX":
+                            return (
+                              <div style={{ display: "flex", gap: 6 }}>
+                                <input
+                                  type="number"
+                                  value={row.priority || "10"}
+                                  onChange={(e) =>
+                                    handleUpdateRow(i, "priority", e.target.value)
+                                  }
+                                  placeholder="10"
+                                  min={0}
+                                  disabled={recordsDisabled}
+                                  style={{ width: 70 }}
+                                  title="Priority"
+                                />
+                                <input
+                                  type="text"
+                                  value={row.value || ""}
+                                  onChange={(e) =>
+                                    handleUpdateRow(i, "value", e.target.value)
+                                  }
+                                  placeholder="mail.example.com."
+                                  disabled={recordsDisabled}
+                                  style={{ flex: 1 }}
+                                />
+                              </div>
+                            );
+                          case "TXT":
+                            return (
+                              <input
+                                type="text"
+                                value={row.value || ""}
+                                onChange={(e) =>
+                                  handleUpdateRow(i, "value", e.target.value)
+                                }
+                                placeholder="v=spf1 include:_spf.example.com ~all"
+                                disabled={recordsDisabled}
+                                style={{ width: "100%" }}
+                              />
+                            );
+                          case "PTR":
+                            return (
+                              <input
+                                type="text"
+                                value={row.value || ""}
+                                onChange={(e) =>
+                                  handleUpdateRow(i, "value", e.target.value)
+                                }
+                                placeholder="hostname.example.com."
+                                disabled={recordsDisabled}
+                                style={{ width: "100%" }}
+                              />
+                            );
+                          case "SRV":
+                            return (
+                              <div style={{ display: "flex", gap: 6 }}>
+                                <input
+                                  type="number"
+                                  value={row.priority || "0"}
+                                  onChange={(e) =>
+                                    handleUpdateRow(i, "priority", e.target.value)
+                                  }
+                                  placeholder="0"
+                                  min={0}
+                                  disabled={recordsDisabled}
+                                  style={{ width: 60 }}
+                                  title="Priority"
+                                />
+                                <input
+                                  type="number"
+                                  value={row.weight || "0"}
+                                  onChange={(e) =>
+                                    handleUpdateRow(i, "weight", e.target.value)
+                                  }
+                                  placeholder="0"
+                                  min={0}
+                                  disabled={recordsDisabled}
+                                  style={{ width: 60 }}
+                                  title="Weight"
+                                />
+                                <input
+                                  type="number"
+                                  value={row.port || "0"}
+                                  onChange={(e) =>
+                                    handleUpdateRow(i, "port", e.target.value)
+                                  }
+                                  placeholder="443"
+                                  min={0}
+                                  max={65535}
+                                  disabled={recordsDisabled}
+                                  style={{ width: 70 }}
+                                  title="Port"
+                                />
+                                <input
+                                  type="text"
+                                  value={row.value || ""}
+                                  onChange={(e) =>
+                                    handleUpdateRow(i, "value", e.target.value)
+                                  }
+                                  placeholder="target.example.com."
+                                  disabled={recordsDisabled}
+                                  style={{ flex: 1 }}
+                                  title="Target"
+                                />
+                              </div>
+                            );
+                          case "CAA":
+                            return (
+                              <div style={{ display: "flex", gap: 6 }}>
+                                <input
+                                  type="number"
+                                  value={row.flags || "0"}
+                                  onChange={(e) =>
+                                    handleUpdateRow(i, "flags", e.target.value)
+                                  }
+                                  placeholder="0"
+                                  min={0}
+                                  max={255}
+                                  disabled={recordsDisabled}
+                                  style={{ width: 60 }}
+                                  title="Flags"
+                                />
+                                <select
+                                  value={row.tag || "issue"}
+                                  onChange={(e) =>
+                                    handleUpdateRow(i, "tag", e.target.value)
+                                  }
+                                  disabled={recordsDisabled}
+                                  style={{ width: 100 }}
+                                  title="Tag"
+                                >
+                                  <option value="issue">issue</option>
+                                  <option value="issuewild">issuewild</option>
+                                  <option value="iodef">iodef</option>
+                                </select>
+                                <input
+                                  type="text"
+                                  value={row.value || ""}
+                                  onChange={(e) =>
+                                    handleUpdateRow(i, "value", e.target.value)
+                                  }
+                                  placeholder="letsencrypt.org"
+                                  disabled={recordsDisabled}
+                                  style={{ flex: 1 }}
+                                  title="Value"
+                                />
+                              </div>
+                            );
+                          case "CERT":
+                            return (
+                              <div style={{ display: "flex", gap: 6 }}>
+                                <input
+                                  type="number"
+                                  value={row.certType || "0"}
+                                  onChange={(e) =>
+                                    handleUpdateRow(i, "certType", e.target.value)
+                                  }
+                                  placeholder="Type"
+                                  min={0}
+                                  disabled={recordsDisabled}
+                                  style={{ width: 70 }}
+                                  title="Cert Type"
+                                />
+                                <input
+                                  type="number"
+                                  value={row.keyTag || "0"}
+                                  onChange={(e) =>
+                                    handleUpdateRow(i, "keyTag", e.target.value)
+                                  }
+                                  placeholder="Key Tag"
+                                  min={0}
+                                  disabled={recordsDisabled}
+                                  style={{ width: 80 }}
+                                  title="Key Tag"
+                                />
+                                <input
+                                  type="number"
+                                  value={row.algorithm || "0"}
+                                  onChange={(e) =>
+                                    handleUpdateRow(i, "algorithm", e.target.value)
+                                  }
+                                  placeholder="Algo"
+                                  min={0}
+                                  disabled={recordsDisabled}
+                                  style={{ width: 70 }}
+                                  title="Algorithm"
+                                />
+                                <input
+                                  type="text"
+                                  value={row.value || ""}
+                                  onChange={(e) =>
+                                    handleUpdateRow(i, "value", e.target.value)
+                                  }
+                                  placeholder="Certificate data"
+                                  disabled={recordsDisabled}
+                                  style={{ flex: 1 }}
+                                  title="Certificate"
+                                />
+                              </div>
+                            );
+                          case "DNSKEY":
+                            return (
+                              <div style={{ display: "flex", gap: 6 }}>
+                                <input
+                                  type="number"
+                                  value={row.flags || "256"}
+                                  onChange={(e) =>
+                                    handleUpdateRow(i, "flags", e.target.value)
+                                  }
+                                  placeholder="256"
+                                  min={0}
+                                  disabled={recordsDisabled}
+                                  style={{ width: 70 }}
+                                  title="Flags"
+                                />
+                                <input
+                                  type="number"
+                                  value={row.protocol || "3"}
+                                  onChange={(e) =>
+                                    handleUpdateRow(i, "protocol", e.target.value)
+                                  }
+                                  placeholder="3"
+                                  min={0}
+                                  disabled={recordsDisabled}
+                                  style={{ width: 60 }}
+                                  title="Protocol"
+                                />
+                                <input
+                                  type="number"
+                                  value={row.algorithm || "8"}
+                                  onChange={(e) =>
+                                    handleUpdateRow(i, "algorithm", e.target.value)
+                                  }
+                                  placeholder="8"
+                                  min={0}
+                                  disabled={recordsDisabled}
+                                  style={{ width: 60 }}
+                                  title="Algorithm"
+                                />
+                                <input
+                                  type="text"
+                                  value={row.value || ""}
+                                  onChange={(e) =>
+                                    handleUpdateRow(i, "value", e.target.value)
+                                  }
+                                  placeholder="Public key data"
+                                  disabled={recordsDisabled}
+                                  style={{ flex: 1 }}
+                                  title="Public Key"
+                                />
+                              </div>
+                            );
+                          case "DS":
+                            return (
+                              <div style={{ display: "flex", gap: 6 }}>
+                                <input
+                                  type="number"
+                                  value={row.keyTag || "0"}
+                                  onChange={(e) =>
+                                    handleUpdateRow(i, "keyTag", e.target.value)
+                                  }
+                                  placeholder="Key Tag"
+                                  min={0}
+                                  disabled={recordsDisabled}
+                                  style={{ width: 80 }}
+                                  title="Key Tag"
+                                />
+                                <input
+                                  type="number"
+                                  value={row.algorithm || "8"}
+                                  onChange={(e) =>
+                                    handleUpdateRow(i, "algorithm", e.target.value)
+                                  }
+                                  placeholder="8"
+                                  min={0}
+                                  disabled={recordsDisabled}
+                                  style={{ width: 60 }}
+                                  title="Algorithm"
+                                />
+                                <input
+                                  type="number"
+                                  value={row.digestType || "2"}
+                                  onChange={(e) =>
+                                    handleUpdateRow(i, "digestType", e.target.value)
+                                  }
+                                  placeholder="2"
+                                  min={0}
+                                  disabled={recordsDisabled}
+                                  style={{ width: 60 }}
+                                  title="Digest Type"
+                                />
+                                <input
+                                  type="text"
+                                  value={row.value || ""}
+                                  onChange={(e) =>
+                                    handleUpdateRow(i, "value", e.target.value)
+                                  }
+                                  placeholder="Digest (hex)"
+                                  disabled={recordsDisabled}
+                                  style={{ flex: 1 }}
+                                  title="Digest"
+                                />
+                              </div>
+                            );
+                          case "HTTPS":
+                            return (
+                              <input
+                                type="text"
+                                value={row.value || ""}
+                                onChange={(e) =>
+                                  handleUpdateRow(i, "value", e.target.value)
+                                }
+                                placeholder="1 . alpn=h3,h2"
+                                disabled={recordsDisabled}
+                                style={{ width: "100%" }}
+                              />
+                            );
+                          case "SVCB":
+                            return (
+                              <input
+                                type="text"
+                                value={row.value || ""}
+                                onChange={(e) =>
+                                  handleUpdateRow(i, "value", e.target.value)
+                                }
+                                placeholder="1 target.example.com. alpn=h2"
+                                disabled={recordsDisabled}
+                                style={{ width: "100%" }}
+                              />
+                            );
+                          case "SSHFP":
+                            return (
+                              <input
+                                type="text"
+                                value={row.value || ""}
+                                onChange={(e) =>
+                                  handleUpdateRow(i, "value", e.target.value)
+                                }
+                                placeholder="1 1 123456789abcdef..."
+                                disabled={recordsDisabled}
+                                style={{ width: "100%" }}
+                              />
+                            );
+                          case "TLSA":
+                            return (
+                              <input
+                                type="text"
+                                value={row.value || ""}
+                                onChange={(e) =>
+                                  handleUpdateRow(i, "value", e.target.value)
+                                }
+                                placeholder="3 1 1 123456789abcdef..."
+                                disabled={recordsDisabled}
+                                style={{ width: "100%" }}
+                              />
+                            );
+                          case "LOC":
+                            return (
+                              <input
+                                type="text"
+                                value={row.value || ""}
+                                onChange={(e) =>
+                                  handleUpdateRow(i, "value", e.target.value)
+                                }
+                                placeholder="51 30 12.748 N 0 7 39.611 W 0.00m"
+                                disabled={recordsDisabled}
+                                style={{ width: "100%" }}
+                              />
+                            );
+                          case "NAPTR":
+                            return (
+                              <input
+                                type="text"
+                                value={row.value || ""}
+                                onChange={(e) =>
+                                  handleUpdateRow(i, "value", e.target.value)
+                                }
+                                placeholder='100 10 "U" "E2U+sip" "!^.*$!sip:info@example.com!" .'
+                                disabled={recordsDisabled}
+                                style={{ width: "100%" }}
+                              />
+                            );
+                          case "URI":
+                            return (
+                              <input
+                                type="text"
+                                value={row.value || ""}
+                                onChange={(e) =>
+                                  handleUpdateRow(i, "value", e.target.value)
+                                }
+                                placeholder='10 1 "https://example.com/path"'
+                                disabled={recordsDisabled}
+                                style={{ width: "100%" }}
+                              />
+                            );
+                          default:
+                            return (
+                              <input
+                                type="text"
+                                value={row.value || ""}
+                                onChange={(e) =>
+                                  handleUpdateRow(i, "value", e.target.value)
+                                }
+                                placeholder="Enter record data"
+                                disabled={recordsDisabled}
+                                style={{ width: "100%" }}
+                              />
+                            );
+                        }
+                      };
 
-              {/* MX */}
-              <h3>MX records</h3>
-              <p className="muted">
-                Mail exchangers for this zone. Lower priority number = higher
-                preference (e.g. 10 then 20).
-              </p>
-              <table className="zones-table" style={{ marginBottom: 14 }}>
-                <thead>
-                  <tr>
-                    <th>Host</th>
-                    <th>Priority</th>
-                    <th>Mail server host</th>
-                    <th style={{ width: 70 }}></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {simple.MX.map((row, i) => (
-                    <tr key={`MX-${i}`}>
-                      <td>
-                        <input
-                          type="text"
-                          value={row.host}
-                          onChange={(e) =>
-                            handleUpdateRow("MX", i, "host", e.target.value)
-                          }
-                          placeholder="@"
-                          disabled={recordsDisabled}
-                        />
-                      </td>
-                      <td>
-                        <input
-                          type="number"
-                          value={row.priority}
-                          onChange={(e) =>
-                            handleUpdateRow("MX", i, "priority", e.target.value)
-                          }
-                          min={0}
-                          style={{ maxWidth: 80 }}
-                          disabled={recordsDisabled}
-                        />
-                      </td>
-                      <td>
-                        <input
-                          type="text"
-                          value={row.value}
-                          onChange={(e) =>
-                            handleUpdateRow("MX", i, "value", e.target.value)
-                          }
-                          placeholder="mail.example.net."
-                          disabled={recordsDisabled}
-                        />
-                      </td>
-                      <td>
-                        <button
-                          type="button"
-                          className="btn btn-ghost"
-                          onClick={() => handleDeleteRow("MX", i)}
-                          disabled={recordsDisabled}
-                        >
-                          ✕
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                  {simple.MX.length === 0 && (
-                    <tr>
-                      <td colSpan="4">
-                        <span className="muted">No MX records yet.</span>
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
+                      return (
+                        <tr key={i}>
+                          <td>
+                            <select
+                              value={row.type}
+                              onChange={(e) =>
+                                handleUpdateRow(i, "type", e.target.value)
+                              }
+                              disabled={recordsDisabled}
+                            >
+                              <option value="A">A</option>
+                              <option value="AAAA">AAAA</option>
+                              <option value="CAA">CAA</option>
+                              <option value="CERT">CERT</option>
+                              <option value="CNAME">CNAME</option>
+                              <option value="DNSKEY">DNSKEY</option>
+                              <option value="DS">DS</option>
+                              <option value="HTTPS">HTTPS</option>
+                              <option value="LOC">LOC</option>
+                              <option value="MX">MX</option>
+                              <option value="NAPTR">NAPTR</option>
+                              <option value="OPENPGPKEY">OPENPGPKEY</option>
+                              <option value="PTR">PTR</option>
+                              <option value="SMIMEA">SMIMEA</option>
+                              <option value="SRV">SRV</option>
+                              <option value="SSHFP">SSHFP</option>
+                              <option value="SVCB">SVCB</option>
+                              <option value="TLSA">TLSA</option>
+                              <option value="TXT">TXT</option>
+                              <option value="URI">URI</option>
+                            </select>
+                          </td>
+                          <td>
+                            <input
+                              type="text"
+                              value={row.host || ""}
+                              onChange={(e) =>
+                                handleUpdateRow(i, "host", e.target.value)
+                              }
+                              placeholder="@"
+                              disabled={recordsDisabled}
+                            />
+                          </td>
+                          <td>{renderFields()}</td>
+                          <td>
+                            <button
+                              type="button"
+                              className="btn btn-ghost"
+                              onClick={() => handleDeleteRow(i)}
+                              disabled={recordsDisabled}
+                            >
+                              ✕
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {simple.records.length === 0 && (
+                      <tr>
+                        <td colSpan="4">
+                          <span className="muted">No DNS records yet.</span>
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
               <button
                 type="button"
                 className="btn btn-secondary"
-                onClick={() => handleAddRow("MX")}
+                onClick={handleAddRow}
                 style={{ marginBottom: 16 }}
                 disabled={recordsDisabled}
               >
-                + Add MX record
+                + Add record
               </button>
 
               <div style={{ marginTop: 12 }}>
