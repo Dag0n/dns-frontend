@@ -1,288 +1,359 @@
 // src/components/Dashboard.jsx
 import { useEffect, useState } from "react";
 import { apiRequest } from "../api";
+import { Icon, Alert, Loading, EmptyState, Modal, Chip, statusTone } from "./ui.jsx";
 
 export default function Dashboard({ token, onSelectZone, user }) {
   const [zones, setZones] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [search, setSearch] = useState("");
   const [showRequestModal, setShowRequestModal] = useState(false);
+  const [editingRequest, setEditingRequest] = useState(null); // request being edited, or null
+  const [myRequests, setMyRequests] = useState([]);
   const [requestZoneName, setRequestZoneName] = useState("");
   const [requestReason, setRequestReason] = useState("");
   const [requestStatus, setRequestStatus] = useState({ message: "", type: "" });
+  const [showClaimModal, setShowClaimModal] = useState(false);
+  const [claimCode, setClaimCode] = useState("");
+  const [claimStatus, setClaimStatus] = useState({ message: "", type: "" });
+
+  const loadZones = async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const data = await apiRequest("/zones", { token });
+      setZones(data.zones || []);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+    try {
+      const req = await apiRequest("/requests/mine", { token });
+      setMyRequests(req.requests || []);
+    } catch {
+      /* requests list is non-critical */
+    }
+  };
 
   useEffect(() => {
-    let cancelled = false;
-
-    async function loadZones() {
-      setLoading(true);
-      setError("");
-      try {
-        const data = await apiRequest("/zones", { token });
-        if (!cancelled) {
-          setZones(data.zones || []);
-        }
-      } catch (err) {
-        if (!cancelled) setError(err.message);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }
-
     loadZones();
-    return () => {
-      cancelled = true;
-    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
+
+  const handleClaim = async (e) => {
+    e.preventDefault();
+    setClaimStatus({ message: "", type: "" });
+    try {
+      const data = await apiRequest("/zones/claim", {
+        method: "POST",
+        token,
+        body: { code: claimCode.trim() },
+      });
+      setClaimStatus({
+        message: `Success! ${data.zone} is now yours to manage.`,
+        type: "success",
+      });
+      setClaimCode("");
+      await loadZones();
+      setTimeout(() => {
+        setShowClaimModal(false);
+        setClaimStatus({ message: "", type: "" });
+      }, 2000);
+    } catch (err) {
+      setClaimStatus({ message: err.message, type: "error" });
+    }
+  };
+
+  const handleRequest = async (e) => {
+    e.preventDefault();
+    setRequestStatus({ message: "", type: "" });
+    try {
+      if (editingRequest) {
+        await apiRequest(`/requests/${editingRequest.id}`, {
+          method: "PUT",
+          token,
+          body: { zoneName: requestZoneName.trim(), reason: requestReason.trim() },
+        });
+        setRequestStatus({ message: "Request updated.", type: "success" });
+      } else {
+        await apiRequest("/requests/create", {
+          method: "POST",
+          token,
+          body: { zoneName: requestZoneName.trim(), reason: requestReason.trim() },
+        });
+        setRequestStatus({
+          message: "Request submitted! An administrator will review it soon.",
+          type: "success",
+        });
+      }
+      await loadZones();
+      setTimeout(() => {
+        setShowRequestModal(false);
+        setEditingRequest(null);
+        setRequestZoneName("");
+        setRequestReason("");
+        setRequestStatus({ message: "", type: "" });
+      }, 1500);
+    } catch (err) {
+      setRequestStatus({ message: err.message, type: "error" });
+    }
+  };
+
+  const openNewRequest = () => {
+    setEditingRequest(null);
+    setRequestZoneName("");
+    setRequestReason("");
+    setShowRequestModal(true);
+  };
+
+  const openEditRequest = (req) => {
+    setEditingRequest(req);
+    setRequestZoneName(req.zone_name);
+    setRequestReason(req.reason);
+    setShowRequestModal(true);
+  };
+
+  const handleWithdraw = async (req) => {
+    const warning =
+      req.status === "approved"
+        ? `Withdraw your request for "${req.zone_name}"? This REVOKES your access to the zone — an administrator would have to re-assign it.`
+        : `Withdraw your request for "${req.zone_name}"?`;
+    if (!confirm(warning)) return;
+    setError("");
+    try {
+      await apiRequest(`/requests/${req.id}`, { method: "DELETE", token });
+      await loadZones();
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const filtered = search.trim()
+    ? zones.filter((z) => z.name.toLowerCase().includes(search.trim().toLowerCase()))
+    : zones;
 
   return (
     <div className="dashboard">
-      {/* Page Header */}
       <div className="page-header">
         <div>
-          <h1>Dashboard</h1>
-          <p className="muted">Welcome back, {user.email.split('@')[0]}</p>
+          <h1>Your domains</h1>
+          <p className="muted">
+            Welcome back, {user.email.split("@")[0]}.
+            {zones.length > 0 &&
+              ` You manage ${zones.length} ${zones.length === 1 ? "domain" : "domains"}.`}
+          </p>
         </div>
-      </div>
-
-      {/* Stats Cards */}
-      <div className="stats-grid">
-        <div className="stat-card">
-          <div className="stat-icon blue">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <circle cx="12" cy="12" r="10"/>
-              <polygon points="10 8 16 12 10 16 10 8"/>
-            </svg>
-          </div>
-          <div className="stat-content">
-            <div className="stat-label">Active Zones</div>
-            <div className="stat-value">{zones.length}</div>
-          </div>
-        </div>
-
-        <div className="stat-card">
-          <div className="stat-icon green">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
-            </svg>
-          </div>
-          <div className="stat-content">
-            <div className="stat-label">DNS Records</div>
-            <div className="stat-value">—</div>
-          </div>
-        </div>
-
-        <div className="stat-card">
-          <div className="stat-icon purple">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M12 2L2 7l10 5 10-5-10-5z"/>
-              <path d="M2 17l10 5 10-5"/>
-              <path d="M2 12l10 5 10-5"/>
-            </svg>
-          </div>
-          <div className="stat-content">
-            <div className="stat-label">Delegations</div>
-            <div className="stat-value">—</div>
-          </div>
-        </div>
-
-        {user.is_admin && (
-          <div className="stat-card">
-            <div className="stat-icon orange">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
-                <circle cx="8.5" cy="7" r="4"/>
-                <line x1="20" y1="8" x2="20" y2="14"/>
-                <line x1="23" y1="11" x2="17" y2="11"/>
-              </svg>
-            </div>
-            <div className="stat-content">
-              <div className="stat-label">Admin Access</div>
-              <div className="stat-value">✓</div>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Main Content */}
-      <div className="card">
-        <div className="card-header">
-          <div>
-            <h2>Your DNS Zones</h2>
-            <p className="muted">Select a zone to manage DNS records and delegation</p>
-          </div>
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <circle cx="12" cy="12" r="10"/>
-            <polygon points="10 8 16 12 10 16 10 8"/>
-          </svg>
-        </div>
-
-        {loading && (
-          <div className="loading-state">
-            <svg className="spinner" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
-            </svg>
-            <p>Loading zones...</p>
-          </div>
-        )}
-
-        {error && <div className="error">{error}</div>}
-
-        {!loading && zones.length === 0 && !error && (
-          <div className="empty-state">
-            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-              <circle cx="12" cy="12" r="10"/>
-              <line x1="12" y1="16" x2="12" y2="12"/>
-              <line x1="12" y1="8" x2="12.01" y2="8"/>
-            </svg>
-            <h3>No zones assigned yet</h3>
-            <p className="muted">Request access to a subdomain or contact your diocese administrator.</p>
-            <button className="btn btn-primary" style={{ marginTop: 'var(--space-lg)' }} onClick={() => setShowRequestModal(true)}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <line x1="12" y1="5" x2="12" y2="19"/>
-                <line x1="5" y1="12" x2="19" y2="12"/>
-              </svg>
-              Request Subdomain Access
+        {zones.length > 0 && (
+          <div className="page-actions">
+            <button className="btn btn-secondary" onClick={() => setShowClaimModal(true)}>
+              <Icon name="key" size={16} />
+              Claim with code
+            </button>
+            <button className="btn btn-primary" onClick={openNewRequest}>
+              <Icon name="plus" size={16} />
+              Request subdomain
             </button>
           </div>
         )}
+      </div>
 
-        {!loading && zones.length > 0 && (
+      {loading && <Loading label="Loading your domains…" />}
+
+      <Alert type="error">{error}</Alert>
+
+      {!loading && zones.length === 0 && !error && (
+        <div className="card">
+          <EmptyState
+            icon="globe"
+            title="No domains yet"
+            actions={
+              <>
+                <button className="btn btn-primary" onClick={() => setShowClaimModal(true)}>
+                  <Icon name="key" size={16} />
+                  Claim with code
+                </button>
+                <button className="btn btn-secondary" onClick={openNewRequest}>
+                  <Icon name="plus" size={16} />
+                  Request access
+                </button>
+              </>
+            }
+          >
+            Have a claim code from your diocese? Claim your parish domain
+            instantly. Otherwise, request access and an administrator will
+            review it.
+          </EmptyState>
+        </div>
+      )}
+
+      {!loading && zones.length > 0 && (
+        <>
+          {zones.length > 5 && (
+            <div className="search-box" style={{ marginBottom: "1rem" }}>
+              <Icon name="search" size={17} />
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search domains…"
+                aria-label="Search domains"
+              />
+            </div>
+          )}
+
           <div className="zone-grid">
-            {zones.map((z) => (
-              <button
-                key={z.id}
-                className="zone-card"
-                onClick={() => onSelectZone(z.name)}
-              >
-                <div className="zone-card-icon">
-                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <circle cx="12" cy="12" r="10"/>
-                    <polygon points="10 8 16 12 10 16 10 8"/>
-                  </svg>
-                </div>
-                <div className="zone-card-content">
-                  <div className="zone-card-title">{z.name}</div>
-                  <div className="zone-card-subtitle">Click to manage</div>
-                </div>
-                <svg className="zone-card-arrow" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <polyline points="9 18 15 12 9 6"/>
-                </svg>
+            {filtered.map((z) => (
+              <button key={z.id} className="zone-card" onClick={() => onSelectZone(z.name)}>
+                <span className="zone-card-icon">
+                  <Icon name="globe" size={21} />
+                </span>
+                <span className="zone-card-body">
+                  <span className="zone-card-name">{z.name}</span>
+                  <span className="zone-card-sub">Manage records &amp; nameservers</span>
+                </span>
+                <Icon name="chevronRight" size={18} />
               </button>
             ))}
+            {filtered.length === 0 && (
+              <p className="muted">No domains match “{search}”.</p>
+            )}
           </div>
-        )}
-      </div>
+        </>
+      )}
 
-      {/* Quick Actions */}
-      {!loading && zones.length > 0 && (
-        <div className="card">
-          <h3>Quick Actions</h3>
-          <div className="quick-actions">
-            <button className="quick-action-btn" onClick={() => setShowRequestModal(true)}>
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <line x1="12" y1="5" x2="12" y2="19"/>
-                <line x1="5" y1="12" x2="19" y2="12"/>
-              </svg>
-              <span>Request New Subdomain</span>
-            </button>
-            <button className="quick-action-btn" disabled>
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                <polyline points="14 2 14 8 20 8"/>
-              </svg>
-              <span>View Documentation</span>
-            </button>
-            <button className="quick-action-btn" disabled>
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <circle cx="12" cy="12" r="10"/>
-                <line x1="12" y1="16" x2="12" y2="12"/>
-                <line x1="12" y1="8" x2="12.01" y2="8"/>
-              </svg>
-              <span>Get Support</span>
-            </button>
+      {myRequests.length > 0 && (
+        <div className="card" style={{ marginTop: "1.25rem" }}>
+          <div className="card-header">
+            <div>
+              <h2>Your requests</h2>
+              <p className="muted">
+                Subdomain requests you've made. Pending requests can be edited;
+                withdrawing an approved request revokes your access.
+              </p>
+            </div>
+          </div>
+          <div className="snap-list">
+            {myRequests.map((req) => (
+              <div key={req.id} className="snap-item" style={{ alignItems: "flex-start" }}>
+                <div className="snap-info" style={{ flex: 1 }}>
+                  <div className="snap-when" style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+                    <code>{req.zone_name}</code>
+                    <Chip tone={statusTone(req.status)}>{req.status}</Chip>
+                  </div>
+                  <div className="snap-meta" style={{ marginTop: "0.25rem" }}>
+                    Requested{" "}
+                    {new Date(req.created_at).toLocaleString("en-GB", {
+                      year: "numeric",
+                      month: "short",
+                      day: "numeric",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                  </div>
+                  {req.reason && (
+                    <p className="muted" style={{ marginTop: "0.3rem", fontSize: "0.85rem" }}>
+                      “{req.reason}”
+                    </p>
+                  )}
+                </div>
+                <div className="row-actions">
+                  {req.status === "pending" && (
+                    <button className="btn btn-secondary btn-sm" onClick={() => openEditRequest(req)}>
+                      <Icon name="edit" size={14} />
+                      Edit
+                    </button>
+                  )}
+                  {(req.status === "pending" || req.status === "approved") && (
+                    <button className="btn btn-danger btn-sm" onClick={() => handleWithdraw(req)}>
+                      <Icon name="x" size={14} />
+                      {req.status === "approved" ? "Revoke access" : "Withdraw"}
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       )}
 
-      {/* Request Access Modal */}
-      {showRequestModal && (
-        <div className="modal-overlay" onClick={() => setShowRequestModal(false)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2>Request Subdomain Access</h2>
-              <button className="modal-close" onClick={() => setShowRequestModal(false)}>
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <line x1="18" y1="6" x2="6" y2="18"/>
-                  <line x1="6" y1="6" x2="18" y2="18"/>
-                </svg>
+      {showClaimModal && (
+        <Modal title="Claim your parish domain" onClose={() => setShowClaimModal(false)}>
+          <form onSubmit={handleClaim}>
+            {claimStatus.message && (
+              <Alert type={claimStatus.type === "error" ? "error" : "success"}>
+                {claimStatus.message}
+              </Alert>
+            )}
+            <label className="field">
+              <span>Claim code</span>
+              <input
+                className="claim-input"
+                type="text"
+                value={claimCode}
+                onChange={(e) => setClaimCode(e.target.value.toUpperCase())}
+                placeholder="K7MPQ2XW9A"
+                maxLength={10}
+                required
+                autoFocus
+              />
+              <span className="hint">
+                Enter the code you received from your diocese. It links your
+                parish's domain to this account.
+              </span>
+            </label>
+            <div className="modal-foot" style={{ padding: 0 }}>
+              <button type="button" className="btn btn-ghost" onClick={() => setShowClaimModal(false)}>
+                Cancel
+              </button>
+              <button type="submit" className="btn btn-primary">
+                Claim domain
               </button>
             </div>
-            <form onSubmit={async (e) => {
-              e.preventDefault();
-              setRequestStatus({ message: "", type: "" });
-              try {
-                await apiRequest("/requests/create", {
-                  method: "POST",
-                  token,
-                  body: { zoneName: requestZoneName.trim(), reason: requestReason.trim() }
-                });
-                setRequestStatus({ message: "Request submitted successfully! An administrator will review it soon.", type: "success" });
-                setRequestZoneName("");
-                setRequestReason("");
-                setTimeout(() => {
-                  setShowRequestModal(false);
-                  setRequestStatus({ message: "", type: "" });
-                }, 2000);
-              } catch (err) {
-                setRequestStatus({ message: err.message, type: "error" });
-              }
-            }}>
-              <div className="modal-body">
-                {requestStatus.message && (
-                  <div className={requestStatus.type === "error" ? "error" : "message"}>
-                    {requestStatus.message}
-                  </div>
-                )}
-                <div className="field">
-                  <label>
-                    <span>Requested Subdomain</span>
-                    <input
-                      type="text"
-                      value={requestZoneName}
-                      onChange={(e) => setRequestZoneName(e.target.value)}
-                      placeholder="e.g., myparish.rubbish.dev"
-                      required
-                    />
-                  </label>
-                  <p className="muted" style={{ marginTop: 'var(--space-xs)' }}>
-                    Enter the full subdomain name you'd like to manage
-                  </p>
-                </div>
-                <div className="field">
-                  <label>
-                    <span>Reason for Request</span>
-                    <textarea
-                      value={requestReason}
-                      onChange={(e) => setRequestReason(e.target.value)}
-                      placeholder="Briefly explain why you need access to this subdomain..."
-                      rows={4}
-                      required
-                    />
-                  </label>
-                </div>
-              </div>
-              <div className="modal-footer">
-                <button type="button" className="btn btn-ghost" onClick={() => setShowRequestModal(false)}>
-                  Cancel
-                </button>
-                <button type="submit" className="btn btn-primary">
-                  Submit Request
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
+          </form>
+        </Modal>
+      )}
+
+      {showRequestModal && (
+        <Modal title={editingRequest ? "Edit request" : "Request subdomain access"} onClose={() => { setShowRequestModal(false); setEditingRequest(null); }}>
+          <form onSubmit={handleRequest}>
+            {requestStatus.message && (
+              <Alert type={requestStatus.type === "error" ? "error" : "success"}>
+                {requestStatus.message}
+              </Alert>
+            )}
+            <label className="field">
+              <span>Requested subdomain</span>
+              <input
+                type="text"
+                value={requestZoneName}
+                onChange={(e) => setRequestZoneName(e.target.value)}
+                placeholder="myparish.anglican.site"
+                required
+              />
+              <span className="hint">Enter the full subdomain name you'd like to manage.</span>
+            </label>
+            <label className="field">
+              <span>Reason for request</span>
+              <textarea
+                value={requestReason}
+                onChange={(e) => setRequestReason(e.target.value)}
+                placeholder="Briefly explain why you need access to this subdomain…"
+                rows={4}
+                required
+              />
+            </label>
+            <div className="modal-foot" style={{ padding: 0 }}>
+              <button type="button" className="btn btn-ghost" onClick={() => setShowRequestModal(false)}>
+                Cancel
+              </button>
+              <button type="submit" className="btn btn-primary">
+                {editingRequest ? "Save changes" : "Submit request"}
+              </button>
+            </div>
+          </form>
+        </Modal>
       )}
     </div>
   );

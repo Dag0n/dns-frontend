@@ -1,6 +1,7 @@
 // src/components/AdminRequests.jsx
 import { useEffect, useState } from "react";
 import { apiRequest } from "../api";
+import { Icon, Alert, Loading, EmptyState, Chip, statusTone } from "./ui.jsx";
 
 export default function AdminRequests({ token }) {
   const [requests, setRequests] = useState([]);
@@ -35,7 +36,7 @@ export default function AdminRequests({ token }) {
         method: "POST",
         token,
       });
-      setMessage("Request approved successfully!");
+      setMessage("Request approved.");
       await loadRequests();
     } catch (err) {
       setError(err.message);
@@ -57,97 +58,67 @@ export default function AdminRequests({ token }) {
     }
   };
 
-  const pendingRequests = requests.filter(r => r.status === 'pending');
-  const processedRequests = requests.filter(r => r.status !== 'pending');
+  const pendingRequests = requests.filter((r) => r.status === "pending");
+  const processedRequests = requests.filter((r) => r.status !== "pending");
 
   return (
     <div className="admin-page">
       <div className="page-header">
         <div>
-          <h1>Subdomain Requests</h1>
-          <p className="muted">Review and approve user requests for subdomain access</p>
+          <h1>Subdomain requests</h1>
+          <p className="muted">Review and approve user requests for subdomain access.</p>
         </div>
       </div>
 
-      {loading && (
-        <div className="loading-state">
-          <svg className="spinner" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
-          </svg>
-          <p>Loading requests...</p>
-        </div>
-      )}
-
-      {error && <div className="error">{error}</div>}
-      {message && <div className="message">{message}</div>}
+      {loading && <Loading label="Loading requests…" />}
+      <Alert type="error">{error}</Alert>
+      <Alert type="success">{message}</Alert>
 
       {!loading && (
         <>
-          {/* Pending Requests */}
           <div className="card">
             <div className="card-header">
               <div>
-                <h2>Pending Requests</h2>
-                <p className="muted">These requests need your attention</p>
-              </div>
-              <div className="stat-badge">
-                {pendingRequests.length}
+                <h2>Pending ({pendingRequests.length})</h2>
               </div>
             </div>
 
             {pendingRequests.length === 0 ? (
-              <div className="empty-state">
-                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <polyline points="20 6 9 17 4 12"/>
-                </svg>
-                <h3>No pending requests</h3>
-                <p className="muted">All requests have been processed</p>
-              </div>
+              <EmptyState icon="check" title="All caught up">
+                There are no requests waiting for review.
+              </EmptyState>
             ) : (
-              <div className="requests-list">
+              <div className="snap-list">
                 {pendingRequests.map((req) => (
-                  <div key={req.id} className="request-card">
-                    <div className="request-icon pending">
-                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <circle cx="12" cy="12" r="10"/>
-                        <polyline points="12 6 12 12 16 14"/>
-                      </svg>
-                    </div>
-                    <div className="request-content">
-                      <div className="request-header">
-                        <h3>{req.zone_name}</h3>
-                        <span className="request-status pending">Pending</span>
+                  <div key={req.id} className="snap-item" style={{ alignItems: "flex-start" }}>
+                    <div className="snap-info" style={{ flex: 1 }}>
+                      <div className="snap-when" style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+                        <code>{req.zone_name}</code>
+                        <Chip tone="amber">pending</Chip>
                       </div>
-                      <p className="request-user">Requested by: {req.user_email}</p>
-                      <p className="request-reason">{req.reason}</p>
-                      <p className="request-date">
-                        {new Date(req.created_at).toLocaleDateString('en-US', {
-                          year: 'numeric',
-                          month: 'long',
-                          day: 'numeric',
-                          hour: '2-digit',
-                          minute: '2-digit'
+                      <div className="snap-meta" style={{ marginTop: "0.25rem" }}>
+                        Requested by {req.email} ·{" "}
+                        {new Date(req.created_at).toLocaleString("en-GB", {
+                          year: "numeric",
+                          month: "short",
+                          day: "numeric",
+                          hour: "2-digit",
+                          minute: "2-digit",
                         })}
-                      </p>
+                      </div>
+                      {req.reason && (
+                        <p style={{ marginTop: "0.4rem", fontSize: "0.9rem", color: "var(--ink-700)" }}>
+                          “{req.reason}”
+                        </p>
+                      )}
                     </div>
-                    <div className="request-actions">
-                      <button
-                        className="btn btn-primary"
-                        onClick={() => handleApprove(req.id)}
-                      >
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                          <polyline points="20 6 9 17 4 12"/>
-                        </svg>
+                    <div className="row-actions">
+                      <button className="btn btn-primary btn-sm" onClick={() => handleApprove(req.id)}>
+                        <Icon name="check" size={15} />
                         Approve
                       </button>
-                      <button
-                        className="btn btn-ghost"
-                        onClick={() => handleDeny(req.id)}
-                      >
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                          <line x1="18" y1="6" x2="6" y2="18"/>
-                          <line x1="6" y1="6" x2="18" y2="18"/>
-                        </svg>
+                      <button className="btn btn-danger btn-sm" onClick={() => handleDeny(req.id)}>
+                        <Icon name="x" size={15} />
                         Deny
                       </button>
                     </div>
@@ -157,14 +128,16 @@ export default function AdminRequests({ token }) {
             )}
           </div>
 
-          {/* Request History */}
           {processedRequests.length > 0 && (
             <div className="card">
-              <h2>Request History</h2>
-              <p className="muted" style={{ marginBottom: 'var(--space-lg)' }}>Previously processed requests</p>
-
-              <div className="table-wrapper">
-                <table className="zones-table">
+              <div className="card-header">
+                <div>
+                  <h2>History</h2>
+                  <p className="muted">Previously processed requests.</p>
+                </div>
+              </div>
+              <div className="table-wrap">
+                <table className="data responsive">
                   <thead>
                     <tr>
                       <th>Subdomain</th>
@@ -176,14 +149,14 @@ export default function AdminRequests({ token }) {
                   <tbody>
                     {processedRequests.map((req) => (
                       <tr key={req.id}>
-                        <td>{req.zone_name}</td>
-                        <td>{req.user_email}</td>
-                        <td>
-                          <span className={`request-status ${req.status}`}>
-                            {req.status}
-                          </span>
+                        <td data-label="Subdomain"><code>{req.zone_name}</code></td>
+                        <td data-label="User">{req.email}</td>
+                        <td data-label="Status">
+                          <Chip tone={statusTone(req.status)}>{req.status}</Chip>
                         </td>
-                        <td>{new Date(req.updated_at || req.created_at).toLocaleDateString()}</td>
+                        <td data-label="Date">
+                          {new Date(req.updated_at || req.created_at).toLocaleDateString()}
+                        </td>
                       </tr>
                     ))}
                   </tbody>

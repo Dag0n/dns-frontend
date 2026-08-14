@@ -12,6 +12,10 @@ dist
 dist-ssr
 *.local
 
+# Private operational facts (IPs, hostnames, credentials) — never commit
+CLAUDE.local.md
+.claude/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
@@ -22,4 +26,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
-serverapp.js
+
+# PocketBase runtime data and binary
+pocketbase/pb_data/
+pocketbase/pocketbase

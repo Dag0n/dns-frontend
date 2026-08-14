@@ -1,6 +1,7 @@
 // src/components/ZonePage.jsx
 import { useEffect, useState } from "react";
 import { apiRequest } from "../api";
+import { Icon, Alert, Loading, Chip, EmptyState } from "./ui.jsx";
 
 function fqdnToHost(rrsetName, zoneName) {
   const zoneFqdn = zoneName + ".";
@@ -32,83 +33,66 @@ function rrsetsToSimple(rrsets, zoneName) {
   (rrsets || []).forEach((rr) => {
     const host = fqdnToHost(rr.name, zoneName);
 
-    // Simple types (just value)
     if (["A", "AAAA", "CNAME", "TXT", "PTR"].includes(rr.type)) {
       rr.records.forEach((r) =>
-        records.push({ type: rr.type, host, value: r.content })
+        records.push({ type: rr.type, host, ttl: rr.ttl, value: r.content })
       );
-    }
-    // MX records (priority + target)
-    else if (rr.type === "MX") {
+    } else if (rr.type === "MX") {
       rr.records.forEach((r) => {
         const parts = r.content.trim().split(/\s+/);
         const priority = parts[0] || "10";
         const target = parts.slice(1).join(" ") || "";
-        records.push({ type: "MX", host, priority, value: target });
+        records.push({ type: "MX", host, ttl: rr.ttl, priority, value: target });
       });
-    }
-    // SRV records (priority, weight, port, target)
-    else if (rr.type === "SRV") {
+    } else if (rr.type === "SRV") {
       rr.records.forEach((r) => {
         const parts = r.content.trim().split(/\s+/);
         const priority = parts[0] || "0";
         const weight = parts[1] || "0";
         const port = parts[2] || "0";
         const target = parts.slice(3).join(" ") || "";
-        records.push({ type: "SRV", host, priority, weight, port, value: target });
+        records.push({ type: "SRV", host, ttl: rr.ttl, priority, weight, port, value: target });
       });
-    }
-    // CAA records (flags, tag, value)
-    else if (rr.type === "CAA") {
+    } else if (rr.type === "CAA") {
       rr.records.forEach((r) => {
         const parts = r.content.trim().split(/\s+/);
         const flags = parts[0] || "0";
         const tag = parts[1] || "issue";
-        const caaValue = parts.slice(2).join(" ").replace(/^"(.*)"$/, '$1') || "";
-        records.push({ type: "CAA", host, flags, tag, value: caaValue });
+        const caaValue = parts.slice(2).join(" ").replace(/^"(.*)"$/, "$1") || "";
+        records.push({ type: "CAA", host, ttl: rr.ttl, flags, tag, value: caaValue });
       });
-    }
-    // CERT records (type, key-tag, algorithm, certificate)
-    else if (rr.type === "CERT") {
+    } else if (rr.type === "CERT") {
       rr.records.forEach((r) => {
         const parts = r.content.trim().split(/\s+/);
         const certType = parts[0] || "0";
         const keyTag = parts[1] || "0";
         const algorithm = parts[2] || "0";
         const certificate = parts.slice(3).join(" ") || "";
-        records.push({ type: "CERT", host, certType, keyTag, algorithm, value: certificate });
+        records.push({ type: "CERT", host, ttl: rr.ttl, certType, keyTag, algorithm, value: certificate });
       });
-    }
-    // DNSKEY records (flags, protocol, algorithm, public-key)
-    else if (rr.type === "DNSKEY") {
+    } else if (rr.type === "DNSKEY") {
       rr.records.forEach((r) => {
         const parts = r.content.trim().split(/\s+/);
         const flags = parts[0] || "256";
         const protocol = parts[1] || "3";
         const algorithm = parts[2] || "8";
         const publicKey = parts.slice(3).join(" ") || "";
-        records.push({ type: "DNSKEY", host, flags, protocol, algorithm, value: publicKey });
+        records.push({ type: "DNSKEY", host, ttl: rr.ttl, flags, protocol, algorithm, value: publicKey });
       });
-    }
-    // DS records (key-tag, algorithm, digest-type, digest)
-    else if (rr.type === "DS") {
+    } else if (rr.type === "DS") {
       rr.records.forEach((r) => {
         const parts = r.content.trim().split(/\s+/);
         const keyTag = parts[0] || "0";
         const algorithm = parts[1] || "8";
         const digestType = parts[2] || "2";
         const digest = parts.slice(3).join(" ") || "";
-        records.push({ type: "DS", host, keyTag, algorithm, digestType, value: digest });
+        records.push({ type: "DS", host, ttl: rr.ttl, keyTag, algorithm, digestType, value: digest });
       });
-    }
-    // Simple raw content types (HTTPS, SVCB, LOC, NAPTR, OPENPGPKEY, SMIMEA, SSHFP, TLSA, URI)
-    else if (["HTTPS", "SVCB", "LOC", "NAPTR", "OPENPGPKEY", "SMIMEA", "SSHFP", "TLSA", "URI"].includes(rr.type)) {
+    } else if (["HTTPS", "SVCB", "LOC", "NAPTR", "OPENPGPKEY", "SMIMEA", "SSHFP", "TLSA", "URI"].includes(rr.type)) {
       rr.records.forEach((r) =>
-        records.push({ type: rr.type, host, value: r.content })
+        records.push({ type: rr.type, host, ttl: rr.ttl, value: r.content })
       );
-    }
-    // Everything else goes to "other" for advanced mode
-    else {
+    } else {
       other.push(rr);
     }
   });
@@ -118,8 +102,6 @@ function rrsetsToSimple(rrsets, zoneName) {
 
 function simpleToRrsets(simple, zoneName, defaultTtl = 3600) {
   const rrsets = [...simple.other];
-
-  // Group records by type and host
   const byTypeAndHost = {};
 
   simple.records.forEach((record) => {
@@ -130,6 +112,7 @@ function simpleToRrsets(simple, zoneName, defaultTtl = 3600) {
       byTypeAndHost[key] = {
         type: record.type,
         name: hostToFqdn(record.host, zoneName),
+        ttl: Number(record.ttl) || defaultTtl,
         records: [],
       };
     }
@@ -163,17 +146,6 @@ function simpleToRrsets(simple, zoneName, defaultTtl = 3600) {
       case "DS":
         content = `${String(record.keyTag || "0").trim()} ${String(record.algorithm || "8").trim()} ${String(record.digestType || "2").trim()} ${record.value.trim()}`;
         break;
-      case "HTTPS":
-      case "SVCB":
-      case "LOC":
-      case "NAPTR":
-      case "OPENPGPKEY":
-      case "SMIMEA":
-      case "SSHFP":
-      case "TLSA":
-      case "URI":
-        content = record.value.trim();
-        break;
       default:
         content = record.value.trim();
     }
@@ -181,12 +153,11 @@ function simpleToRrsets(simple, zoneName, defaultTtl = 3600) {
     byTypeAndHost[key].records.push({ content, disabled: false });
   });
 
-  // Convert to rrsets
-  Object.values(byTypeAndHost).forEach(({ type, name, records }) => {
+  Object.values(byTypeAndHost).forEach(({ type, name, ttl, records }) => {
     rrsets.push({
       name,
       type,
-      ttl: defaultTtl,
+      ttl,
       records,
       comments: [],
     });
@@ -195,38 +166,228 @@ function simpleToRrsets(simple, zoneName, defaultTtl = 3600) {
   return rrsets;
 }
 
+// Compare two rrset arrays (by type+name) for the snapshot diff view.
+function diffRrsets(before, after) {
+  const keyOf = (rr) => `${rr.type}||${rr.name}`;
+  const contentsOf = (rr) => ((rr && rr.records) || []).map((r) => r.content);
+  const skip = (rr) => rr.type === "SOA";
+  const bBy = {};
+  (before || []).filter((rr) => !skip(rr)).forEach((rr) => (bBy[keyOf(rr)] = rr));
+  const aBy = {};
+  (after || []).filter((rr) => !skip(rr)).forEach((rr) => (aBy[keyOf(rr)] = rr));
+
+  const added = [];
+  const removed = [];
+  const changed = [];
+  Object.keys(aBy).forEach((k) => {
+    if (!bBy[k]) {
+      added.push(aBy[k]);
+    } else {
+      const bRec = contentsOf(bBy[k]);
+      const aRec = contentsOf(aBy[k]);
+      const same =
+        bBy[k].ttl === aBy[k].ttl &&
+        JSON.stringify(bRec.slice().sort()) === JSON.stringify(aRec.slice().sort());
+      if (!same) changed.push({ before: bBy[k], after: aBy[k] });
+    }
+  });
+  Object.keys(bBy).forEach((k) => {
+    if (!aBy[k]) removed.push(bBy[k]);
+  });
+  return { added, removed, changed };
+}
+
+const RECORD_TYPES = [
+  "A", "AAAA", "CAA", "CERT", "CNAME", "DNSKEY", "DS", "HTTPS", "LOC", "MX",
+  "NAPTR", "OPENPGPKEY", "PTR", "SMIMEA", "SRV", "SSHFP", "SVCB", "TLSA", "TXT", "URI",
+];
+
+// Per-type extra fields rendered before the main value input.
+const TYPE_FIELDS = {
+  MX: [{ key: "priority", label: "Priority", input: "number", def: "10" }],
+  SRV: [
+    { key: "priority", label: "Priority", input: "number", def: "0" },
+    { key: "weight", label: "Weight", input: "number", def: "0" },
+    { key: "port", label: "Port", input: "number", def: "443" },
+  ],
+  CAA: [
+    { key: "flags", label: "Flags", input: "number", def: "0" },
+    { key: "tag", label: "Tag", input: "select", options: ["issue", "issuewild", "iodef"], def: "issue" },
+  ],
+  CERT: [
+    { key: "certType", label: "Type", input: "number", def: "0" },
+    { key: "keyTag", label: "Key tag", input: "number", def: "0" },
+    { key: "algorithm", label: "Algorithm", input: "number", def: "0" },
+  ],
+  DNSKEY: [
+    { key: "flags", label: "Flags", input: "number", def: "256" },
+    { key: "protocol", label: "Protocol", input: "number", def: "3" },
+    { key: "algorithm", label: "Algorithm", input: "number", def: "8" },
+  ],
+  DS: [
+    { key: "keyTag", label: "Key tag", input: "number", def: "0" },
+    { key: "algorithm", label: "Algorithm", input: "number", def: "8" },
+    { key: "digestType", label: "Digest type", input: "number", def: "2" },
+  ],
+};
+
+const VALUE_META = {
+  A: { label: "IPv4 address", placeholder: "192.0.2.1" },
+  AAAA: { label: "IPv6 address", placeholder: "2001:db8::1" },
+  CNAME: { label: "Target", placeholder: "target.example.com." },
+  MX: { label: "Mail server", placeholder: "mail.example.com." },
+  TXT: { label: "Content", placeholder: "v=spf1 include:_spf.example.com ~all" },
+  PTR: { label: "Hostname", placeholder: "hostname.example.com." },
+  SRV: { label: "Target", placeholder: "target.example.com." },
+  CAA: { label: "Value", placeholder: "letsencrypt.org" },
+  CERT: { label: "Certificate", placeholder: "Certificate data" },
+  DNSKEY: { label: "Public key", placeholder: "Public key data" },
+  DS: { label: "Digest", placeholder: "Digest (hex)" },
+  HTTPS: { label: "Value", placeholder: "1 . alpn=h3,h2" },
+  SVCB: { label: "Value", placeholder: "1 target.example.com. alpn=h2" },
+  SSHFP: { label: "Value", placeholder: "1 1 123456789abcdef…" },
+  TLSA: { label: "Value", placeholder: "3 1 1 123456789abcdef…" },
+  LOC: { label: "Value", placeholder: "51 30 12.748 N 0 7 39.611 W 0.00m" },
+  NAPTR: { label: "Value", placeholder: '100 10 "U" "E2U+sip" "!^.*$!sip:info@example.com!" .' },
+  URI: { label: "Value", placeholder: '10 1 "https://example.com/path"' },
+};
+
+function RecordRow({ row, index, onChange, onDelete, disabled, defaultTtl }) {
+  const extras = TYPE_FIELDS[row.type] || [];
+  const meta = VALUE_META[row.type] || { label: "Value", placeholder: "Record data" };
+
+  return (
+    <div className="rec-row">
+      <div className="rec-field">
+        <label>Type</label>
+        <select
+          value={row.type}
+          onChange={(e) => onChange(index, "type", e.target.value)}
+          disabled={disabled}
+        >
+          {RECORD_TYPES.map((t) => (
+            <option key={t} value={t}>{t}</option>
+          ))}
+        </select>
+      </div>
+
+      <div className="rec-field">
+        <label>Host</label>
+        <input
+          type="text"
+          value={row.host || ""}
+          onChange={(e) => onChange(index, "host", e.target.value)}
+          placeholder="@ (zone root)"
+          disabled={disabled}
+        />
+      </div>
+
+      <div className="rec-sub">
+        <div className="rec-field" style={{ maxWidth: 100 }}>
+          <label>TTL</label>
+          <input
+            type="number"
+            value={row.ttl ?? ""}
+            onChange={(e) => onChange(index, "ttl", e.target.value)}
+            placeholder={String(defaultTtl || 3600)}
+            min={60}
+            disabled={disabled}
+            title="Time to live (seconds). Records with the same type and host share one TTL."
+          />
+        </div>
+        {extras.map((f) =>
+          f.input === "select" ? (
+            <div className="rec-field" key={f.key} style={{ maxWidth: 120 }}>
+              <label>{f.label}</label>
+              <select
+                value={row[f.key] || f.def}
+                onChange={(e) => onChange(index, f.key, e.target.value)}
+                disabled={disabled}
+              >
+                {f.options.map((o) => (
+                  <option key={o} value={o}>{o}</option>
+                ))}
+              </select>
+            </div>
+          ) : (
+            <div className="rec-field" key={f.key} style={{ maxWidth: 110 }}>
+              <label>{f.label}</label>
+              <input
+                type="number"
+                value={row[f.key] ?? f.def}
+                onChange={(e) => onChange(index, f.key, e.target.value)}
+                placeholder={f.def}
+                min={0}
+                disabled={disabled}
+              />
+            </div>
+          )
+        )}
+        <div className="rec-field grow">
+          <label>{meta.label}</label>
+          <input
+            type="text"
+            value={row.value || ""}
+            onChange={(e) => onChange(index, "value", e.target.value)}
+            placeholder={meta.placeholder}
+            disabled={disabled}
+          />
+        </div>
+      </div>
+
+      <button
+        type="button"
+        className="icon-btn rec-del"
+        onClick={() => onDelete(index)}
+        disabled={disabled}
+        aria-label="Delete record"
+        title="Delete record"
+      >
+        <Icon name="trash" size={17} />
+      </button>
+    </div>
+  );
+}
+
 export default function ZonePage({ token, zoneName, onBack, isAdminEdit = false }) {
-  const [tab, setTab] = useState("basic"); // "basic" | "advanced"
+  const [tab, setTab] = useState("records"); // records | nameservers | advanced | snapshots
   const [loading, setLoading] = useState(true);
 
-  // Delegation
+  const [snapshots, setSnapshots] = useState([]);
+
   const [delegationMode, setDelegationMode] = useState("internal");
   const [externalNsText, setExternalNsText] = useState("");
 
-  // Records
   const [hasInternalZone, setHasInternalZone] = useState(true);
   const [simple, setSimple] = useState({ records: [], other: [] });
   const [ttl, setTtl] = useState(3600);
   const [rrsetsText, setRrsetsText] = useState("[]");
 
-  // Messages
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
 
+  // Sharing (owner-managed access)
+  const [access, setAccess] = useState(null);
+  const [managerEmail, setManagerEmail] = useState("");
+
+  // Snapshot diff expansion: { [snapId]: {loading, diff} }
+  const [snapDiffs, setSnapDiffs] = useState({});
+  const [openSnap, setOpenSnap] = useState(null);
+
+  // Note: doesn't clear message/error - callers set their own success or
+  // failure feedback right before/after reloading, and clearing here would
+  // wipe it in the same render batch.
   const reloadZone = async () => {
     setLoading(true);
-    setError("");
-    setMessage("");
 
     try {
       const endpoint = isAdminEdit ? `/admin/zones/${zoneName}/details` : `/zones/${zoneName}`;
       const data = await apiRequest(endpoint, { token });
 
-      // delegation
       setDelegationMode(data.delegation?.mode || "internal");
       setExternalNsText((data.delegation?.externalNs || []).join("\n"));
+      setAccess(data.access || null);
 
-      // internal zone presence
       setHasInternalZone(
         typeof data.hasInternalZone === "boolean" ? data.hasInternalZone : true
       );
@@ -238,6 +399,11 @@ export default function ZonePage({ token, zoneName, onBack, isAdminEdit = false 
       const simpleParsed = rrsetsToSimple(rrsets, zoneName);
       setSimple(simpleParsed);
       setRrsetsText(JSON.stringify(rrsets, null, 2));
+
+      if (isAdminEdit) {
+        const snap = await apiRequest(`/admin/zones/${zoneName}/snapshots`, { token });
+        setSnapshots(snap.snapshots || []);
+      }
     } catch (err) {
       setError(err.message);
     } finally {
@@ -245,7 +411,54 @@ export default function ZonePage({ token, zoneName, onBack, isAdminEdit = false 
     }
   };
 
+  const handleRestoreSnapshot = async (snap) => {
+    if (
+      !confirm(
+        `Restore "${zoneName}" to its state from ${new Date(snap.created_at).toLocaleString()} (${snap.record_count} record sets)? The current state is snapshotted first, so this can be undone.`
+      )
+    ) {
+      return;
+    }
+    setError("");
+    setMessage("");
+    try {
+      await apiRequest(`/admin/zones/${zoneName}/snapshots/${snap.id}/restore`, {
+        method: "POST",
+        token,
+      });
+      setMessage("Zone restored from snapshot.");
+      await reloadZone();
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const toggleSnapshotDiff = async (snap) => {
+    if (openSnap === snap.id) {
+      setOpenSnap(null);
+      return;
+    }
+    setOpenSnap(snap.id);
+    if (snapDiffs[snap.id]) return; // cached
+    setSnapDiffs((prev) => ({ ...prev, [snap.id]: { loading: true } }));
+    try {
+      const data = await apiRequest(`/admin/zones/${zoneName}/snapshots/${snap.id}`, { token });
+      let current = [];
+      try {
+        current = JSON.parse(rrsetsText) || [];
+      } catch {
+        /* current state unavailable */
+      }
+      const diff = diffRrsets(data.rrsets || [], current);
+      setSnapDiffs((prev) => ({ ...prev, [snap.id]: { loading: false, diff } }));
+    } catch (err) {
+      setSnapDiffs((prev) => ({ ...prev, [snap.id]: { loading: false, error: err.message } }));
+    }
+  };
+
   useEffect(() => {
+    setError("");
+    setMessage("");
     reloadZone();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [zoneName]);
@@ -271,23 +484,26 @@ export default function ZonePage({ token, zoneName, onBack, isAdminEdit = false 
       const endpoint = isAdminEdit
         ? `/admin/zones/${zoneName}/delegation`
         : `/zones/${zoneName}/delegation`;
-      await apiRequest(endpoint, {
+      const data = await apiRequest(endpoint, {
         method: "PUT",
         token,
         body: { mode: delegationMode, externalNs },
       });
-      setMessage("Delegation (nameservers) updated successfully.");
+      setMessage(
+        data.restored > 0
+          ? `Nameservers updated. Restored ${data.restored} record set(s) from before the external delegation.`
+          : "Nameservers updated successfully."
+      );
       await reloadZone();
     } catch (err) {
       setError(err.message);
     }
   };
 
-  // Basic editor handlers
   const handleAddRow = () => {
     setSimple((prev) => ({
       ...prev,
-      records: [...prev.records, { type: "A", host: "@", value: "" }],
+      records: [...prev.records, { type: "A", host: "", ttl: "", value: "" }],
     }));
   };
 
@@ -313,7 +529,7 @@ export default function ZonePage({ token, zoneName, onBack, isAdminEdit = false 
 
     if (delegationMode === "external") {
       setError(
-        "This zone is currently using an external DNS provider. Switch to Anglican DNS above to edit records here."
+        "This zone is currently using an external DNS provider. Switch to Anglican DNS in the Nameservers tab to edit records here."
       );
       return;
     }
@@ -343,7 +559,7 @@ export default function ZonePage({ token, zoneName, onBack, isAdminEdit = false 
 
     if (delegationMode === "external") {
       setError(
-        "This zone is currently using an external DNS provider. Switch to Anglican DNS above to edit records here."
+        "This zone is currently using an external DNS provider. Switch to Anglican DNS in the Nameservers tab to edit records here."
       );
       return;
     }
@@ -375,102 +591,128 @@ export default function ZonePage({ token, zoneName, onBack, isAdminEdit = false 
     }
   };
 
-  const recordsDisabled =
-    delegationMode === "external" || !hasInternalZone;
+  const handleAddManager = async (e) => {
+    e.preventDefault();
+    setError("");
+    setMessage("");
+    try {
+      await apiRequest(`/zones/${zoneName}/managers`, {
+        method: "POST",
+        token,
+        body: { email: managerEmail.trim() },
+      });
+      setMessage(`${managerEmail.trim()} can now manage this zone.`);
+      setManagerEmail("");
+      await reloadZone();
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const handleTransferOwner = async (m) => {
+    if (
+      !confirm(
+        `Make ${m.email} the owner of ${zoneName}? ${access && access.is_owner && !isAdminEdit ? "You will stay on the zone as a manager." : "The previous owner stays on the zone as a manager."}`
+      )
+    )
+      return;
+    setError("");
+    setMessage("");
+    try {
+      await apiRequest(`/zones/${zoneName}/transfer-owner`, {
+        method: "POST",
+        token,
+        body: { userId: m.id },
+      });
+      setMessage(`${m.email} is now the owner of this zone.`);
+      await reloadZone();
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const handleRemoveManager = async (m) => {
+    if (!confirm(`Remove ${m.email} from this zone?`)) return;
+    setError("");
+    setMessage("");
+    try {
+      await apiRequest(`/zones/${zoneName}/managers/${m.id}`, {
+        method: "DELETE",
+        token,
+      });
+      setMessage(`${m.email} no longer has access.`);
+      await reloadZone();
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const recordsDisabled = delegationMode === "external" || !hasInternalZone;
 
   return (
     <div className="zone-page">
-      <div className="zone-header">
-        <button className="btn btn-ghost" onClick={onBack}>
-          ← Back
-        </button>
-        <h2>{zoneName}</h2>
+      <div className="page-header" style={{ alignItems: "center" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", minWidth: 0, flexWrap: "wrap" }}>
+          <button className="icon-btn" onClick={onBack} aria-label="Back" title="Back">
+            <Icon name="back" size={20} />
+          </button>
+          <h1 style={{ wordBreak: "break-all" }}>{zoneName}</h1>
+          {!loading && (
+            <Chip tone={delegationMode === "external" ? "amber" : "teal"}>
+              {delegationMode === "external" ? "External DNS" : "Anglican DNS"}
+            </Chip>
+          )}
+        </div>
       </div>
 
-      {loading && <p>Loading zone…</p>}
-      {error && <p className="error">{error}</p>}
-      {message && <p className="message">{message}</p>}
+      {loading && <Loading label="Loading zone…" />}
+      <Alert type="error">{error}</Alert>
+      <Alert type="success">{message}</Alert>
 
       {!loading && (
         <>
-          {/* Delegation card */}
-          <section className="card" style={{ marginBottom: 16 }}>
-            <h3>Delegation (Nameservers)</h3>
-            <p className="muted">
-              Choose whether this subdomain uses the Anglican DNS platform or
-              an external DNS provider. Changing this updates the{" "}
-              <code>NS</code> records in the parent zone.
-            </p>
-
-            <form onSubmit={handleSaveDelegation}>
-              <label className="radio">
-                <input
-                  type="radio"
-                  value="internal"
-                  checked={delegationMode === "internal"}
-                  onChange={() => setDelegationMode("internal")}
-                />
-                <span>Use Anglican DNS (default nameservers)</span>
-              </label>
-
-              <label className="radio">
-                <input
-                  type="radio"
-                  value="external"
-                  checked={delegationMode === "external"}
-                  onChange={() => setDelegationMode("external")}
-                />
-                <span>Use external DNS provider</span>
-              </label>
-
-              <label className="field">
-                <span>
-                  External nameservers (one per line, e.g.{" "}
-                  <code>ns1.example.net.</code>)
-                </span>
-                <textarea
-                  rows={4}
-                  value={externalNsText}
-                  onChange={(e) => setExternalNsText(e.target.value)}
-                  disabled={delegationMode !== "external"}
-                />
-              </label>
-
-              <button className="btn btn-primary" type="submit">
-                Save Delegation
+          <div className="tabs" role="tablist">
+            <button role="tab" className={`tab ${tab === "records" ? "active" : ""}`} onClick={() => setTab("records")}>
+              Records
+            </button>
+            <button role="tab" className={`tab ${tab === "nameservers" ? "active" : ""}`} onClick={() => setTab("nameservers")}>
+              Nameservers
+            </button>
+            <button role="tab" className={`tab ${tab === "advanced" ? "active" : ""}`} onClick={() => setTab("advanced")}>
+              Advanced
+            </button>
+            {access && (
+              <button role="tab" className={`tab ${tab === "sharing" ? "active" : ""}`} onClick={() => setTab("sharing")}>
+                {isAdminEdit ? "Users" : "Sharing"}
               </button>
-            </form>
-          </section>
-
-          {/* Records editor (Basic / Advanced) */}
-          <div style={{ marginBottom: 10 }}>
-            <button
-              className={`nav-link ${tab === "basic" ? "active" : ""}`}
-              onClick={() => setTab("basic")}
-            >
-              Basic DNS editor
-            </button>
-            <button
-              className={`nav-link ${tab === "advanced" ? "active" : ""}`}
-              onClick={() => setTab("advanced")}
-              style={{ marginLeft: 6 }}
-            >
-              Advanced JSON
-            </button>
+            )}
+            {isAdminEdit && (
+              <button role="tab" className={`tab ${tab === "snapshots" ? "active" : ""}`} onClick={() => setTab("snapshots")}>
+                Snapshots
+              </button>
+            )}
           </div>
 
-          {recordsDisabled && (
-            <p className="muted" style={{ marginBottom: 8 }}>
-              This zone is currently using an external DNS provider or has no
-              internal zone configured. Records below are read-only. Switch to{" "}
-              <strong>Use Anglican DNS</strong> above to manage records here.
-            </p>
+          {recordsDisabled && tab !== "nameservers" && tab !== "snapshots" && (
+            <Alert type="error">
+              This zone uses an external DNS provider or has no internal zone
+              configured, so records are read-only. Switch to{" "}
+              <strong>Anglican DNS</strong> in the Nameservers tab to manage
+              records here.
+            </Alert>
           )}
 
-          {tab === "basic" && (
+          {tab === "records" && (
             <form onSubmit={handleSaveBasic} className="card">
-              <div style={{ display: "flex", gap: 12, marginBottom: 12 }}>
-                <div className="field" style={{ maxWidth: 160 }}>
+              <div className="card-header">
+                <div>
+                  <h2>DNS records</h2>
+                  <p className="muted">
+                    Use <code>@</code> as the host for the zone root. Leave a
+                    record's TTL blank to use the zone default.
+                  </p>
+                </div>
+                <label className="field ttl-field">
                   <span>Default TTL (seconds)</span>
                   <input
                     type="number"
@@ -479,568 +721,114 @@ export default function ZonePage({ token, zoneName, onBack, isAdminEdit = false 
                     min={60}
                     disabled={recordsDisabled}
                   />
+                </label>
+              </div>
+
+              {simple.records.length === 0 ? (
+                <EmptyState icon="server" title="No records yet">
+                  Add your first DNS record — for example an A record pointing
+                  your domain at your web host.
+                </EmptyState>
+              ) : (
+                <div className="rec-list">
+                  {simple.records.map((row, i) => (
+                    <RecordRow
+                      key={i}
+                      row={row}
+                      index={i}
+                      onChange={handleUpdateRow}
+                      onDelete={handleDeleteRow}
+                      disabled={recordsDisabled}
+                      defaultTtl={ttl}
+                    />
+                  ))}
                 </div>
-                <p className="muted">
-                  TTL applies to records edited here. Other record types are
-                  preserved.
-                </p>
-              </div>
-
-              <h3>DNS Records</h3>
-              <p className="muted">
-                Add DNS records for your zone. Select the record type and fill in
-                the required fields. Use <code>@</code> for the zone root.
-              </p>
-
-              <div style={{ overflowX: "auto" }}>
-                <table className="zones-table" style={{ marginBottom: 14 }}>
-                  <thead>
-                    <tr>
-                      <th style={{ minWidth: 100 }}>Type</th>
-                      <th style={{ minWidth: 120 }}>Host</th>
-                      <th style={{ minWidth: 200 }}>Value</th>
-                      <th style={{ width: 70 }}></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {simple.records.map((row, i) => {
-                      const renderFields = () => {
-                        switch (row.type) {
-                          case "A":
-                            return (
-                              <input
-                                type="text"
-                                value={row.value || ""}
-                                onChange={(e) =>
-                                  handleUpdateRow(i, "value", e.target.value)
-                                }
-                                placeholder="192.0.2.1"
-                                disabled={recordsDisabled}
-                                style={{ width: "100%" }}
-                              />
-                            );
-                          case "AAAA":
-                            return (
-                              <input
-                                type="text"
-                                value={row.value || ""}
-                                onChange={(e) =>
-                                  handleUpdateRow(i, "value", e.target.value)
-                                }
-                                placeholder="2001:db8::1"
-                                disabled={recordsDisabled}
-                                style={{ width: "100%" }}
-                              />
-                            );
-                          case "CNAME":
-                            return (
-                              <input
-                                type="text"
-                                value={row.value || ""}
-                                onChange={(e) =>
-                                  handleUpdateRow(i, "value", e.target.value)
-                                }
-                                placeholder="target.example.com."
-                                disabled={recordsDisabled}
-                                style={{ width: "100%" }}
-                              />
-                            );
-                          case "MX":
-                            return (
-                              <div style={{ display: "flex", gap: 6 }}>
-                                <input
-                                  type="number"
-                                  value={row.priority || "10"}
-                                  onChange={(e) =>
-                                    handleUpdateRow(i, "priority", e.target.value)
-                                  }
-                                  placeholder="10"
-                                  min={0}
-                                  disabled={recordsDisabled}
-                                  style={{ width: 70 }}
-                                  title="Priority"
-                                />
-                                <input
-                                  type="text"
-                                  value={row.value || ""}
-                                  onChange={(e) =>
-                                    handleUpdateRow(i, "value", e.target.value)
-                                  }
-                                  placeholder="mail.example.com."
-                                  disabled={recordsDisabled}
-                                  style={{ flex: 1 }}
-                                />
-                              </div>
-                            );
-                          case "TXT":
-                            return (
-                              <input
-                                type="text"
-                                value={row.value || ""}
-                                onChange={(e) =>
-                                  handleUpdateRow(i, "value", e.target.value)
-                                }
-                                placeholder="v=spf1 include:_spf.example.com ~all"
-                                disabled={recordsDisabled}
-                                style={{ width: "100%" }}
-                              />
-                            );
-                          case "PTR":
-                            return (
-                              <input
-                                type="text"
-                                value={row.value || ""}
-                                onChange={(e) =>
-                                  handleUpdateRow(i, "value", e.target.value)
-                                }
-                                placeholder="hostname.example.com."
-                                disabled={recordsDisabled}
-                                style={{ width: "100%" }}
-                              />
-                            );
-                          case "SRV":
-                            return (
-                              <div style={{ display: "flex", gap: 6 }}>
-                                <input
-                                  type="number"
-                                  value={row.priority || "0"}
-                                  onChange={(e) =>
-                                    handleUpdateRow(i, "priority", e.target.value)
-                                  }
-                                  placeholder="0"
-                                  min={0}
-                                  disabled={recordsDisabled}
-                                  style={{ width: 60 }}
-                                  title="Priority"
-                                />
-                                <input
-                                  type="number"
-                                  value={row.weight || "0"}
-                                  onChange={(e) =>
-                                    handleUpdateRow(i, "weight", e.target.value)
-                                  }
-                                  placeholder="0"
-                                  min={0}
-                                  disabled={recordsDisabled}
-                                  style={{ width: 60 }}
-                                  title="Weight"
-                                />
-                                <input
-                                  type="number"
-                                  value={row.port || "0"}
-                                  onChange={(e) =>
-                                    handleUpdateRow(i, "port", e.target.value)
-                                  }
-                                  placeholder="443"
-                                  min={0}
-                                  max={65535}
-                                  disabled={recordsDisabled}
-                                  style={{ width: 70 }}
-                                  title="Port"
-                                />
-                                <input
-                                  type="text"
-                                  value={row.value || ""}
-                                  onChange={(e) =>
-                                    handleUpdateRow(i, "value", e.target.value)
-                                  }
-                                  placeholder="target.example.com."
-                                  disabled={recordsDisabled}
-                                  style={{ flex: 1 }}
-                                  title="Target"
-                                />
-                              </div>
-                            );
-                          case "CAA":
-                            return (
-                              <div style={{ display: "flex", gap: 6 }}>
-                                <input
-                                  type="number"
-                                  value={row.flags || "0"}
-                                  onChange={(e) =>
-                                    handleUpdateRow(i, "flags", e.target.value)
-                                  }
-                                  placeholder="0"
-                                  min={0}
-                                  max={255}
-                                  disabled={recordsDisabled}
-                                  style={{ width: 60 }}
-                                  title="Flags"
-                                />
-                                <select
-                                  value={row.tag || "issue"}
-                                  onChange={(e) =>
-                                    handleUpdateRow(i, "tag", e.target.value)
-                                  }
-                                  disabled={recordsDisabled}
-                                  style={{ width: 100 }}
-                                  title="Tag"
-                                >
-                                  <option value="issue">issue</option>
-                                  <option value="issuewild">issuewild</option>
-                                  <option value="iodef">iodef</option>
-                                </select>
-                                <input
-                                  type="text"
-                                  value={row.value || ""}
-                                  onChange={(e) =>
-                                    handleUpdateRow(i, "value", e.target.value)
-                                  }
-                                  placeholder="letsencrypt.org"
-                                  disabled={recordsDisabled}
-                                  style={{ flex: 1 }}
-                                  title="Value"
-                                />
-                              </div>
-                            );
-                          case "CERT":
-                            return (
-                              <div style={{ display: "flex", gap: 6 }}>
-                                <input
-                                  type="number"
-                                  value={row.certType || "0"}
-                                  onChange={(e) =>
-                                    handleUpdateRow(i, "certType", e.target.value)
-                                  }
-                                  placeholder="Type"
-                                  min={0}
-                                  disabled={recordsDisabled}
-                                  style={{ width: 70 }}
-                                  title="Cert Type"
-                                />
-                                <input
-                                  type="number"
-                                  value={row.keyTag || "0"}
-                                  onChange={(e) =>
-                                    handleUpdateRow(i, "keyTag", e.target.value)
-                                  }
-                                  placeholder="Key Tag"
-                                  min={0}
-                                  disabled={recordsDisabled}
-                                  style={{ width: 80 }}
-                                  title="Key Tag"
-                                />
-                                <input
-                                  type="number"
-                                  value={row.algorithm || "0"}
-                                  onChange={(e) =>
-                                    handleUpdateRow(i, "algorithm", e.target.value)
-                                  }
-                                  placeholder="Algo"
-                                  min={0}
-                                  disabled={recordsDisabled}
-                                  style={{ width: 70 }}
-                                  title="Algorithm"
-                                />
-                                <input
-                                  type="text"
-                                  value={row.value || ""}
-                                  onChange={(e) =>
-                                    handleUpdateRow(i, "value", e.target.value)
-                                  }
-                                  placeholder="Certificate data"
-                                  disabled={recordsDisabled}
-                                  style={{ flex: 1 }}
-                                  title="Certificate"
-                                />
-                              </div>
-                            );
-                          case "DNSKEY":
-                            return (
-                              <div style={{ display: "flex", gap: 6 }}>
-                                <input
-                                  type="number"
-                                  value={row.flags || "256"}
-                                  onChange={(e) =>
-                                    handleUpdateRow(i, "flags", e.target.value)
-                                  }
-                                  placeholder="256"
-                                  min={0}
-                                  disabled={recordsDisabled}
-                                  style={{ width: 70 }}
-                                  title="Flags"
-                                />
-                                <input
-                                  type="number"
-                                  value={row.protocol || "3"}
-                                  onChange={(e) =>
-                                    handleUpdateRow(i, "protocol", e.target.value)
-                                  }
-                                  placeholder="3"
-                                  min={0}
-                                  disabled={recordsDisabled}
-                                  style={{ width: 60 }}
-                                  title="Protocol"
-                                />
-                                <input
-                                  type="number"
-                                  value={row.algorithm || "8"}
-                                  onChange={(e) =>
-                                    handleUpdateRow(i, "algorithm", e.target.value)
-                                  }
-                                  placeholder="8"
-                                  min={0}
-                                  disabled={recordsDisabled}
-                                  style={{ width: 60 }}
-                                  title="Algorithm"
-                                />
-                                <input
-                                  type="text"
-                                  value={row.value || ""}
-                                  onChange={(e) =>
-                                    handleUpdateRow(i, "value", e.target.value)
-                                  }
-                                  placeholder="Public key data"
-                                  disabled={recordsDisabled}
-                                  style={{ flex: 1 }}
-                                  title="Public Key"
-                                />
-                              </div>
-                            );
-                          case "DS":
-                            return (
-                              <div style={{ display: "flex", gap: 6 }}>
-                                <input
-                                  type="number"
-                                  value={row.keyTag || "0"}
-                                  onChange={(e) =>
-                                    handleUpdateRow(i, "keyTag", e.target.value)
-                                  }
-                                  placeholder="Key Tag"
-                                  min={0}
-                                  disabled={recordsDisabled}
-                                  style={{ width: 80 }}
-                                  title="Key Tag"
-                                />
-                                <input
-                                  type="number"
-                                  value={row.algorithm || "8"}
-                                  onChange={(e) =>
-                                    handleUpdateRow(i, "algorithm", e.target.value)
-                                  }
-                                  placeholder="8"
-                                  min={0}
-                                  disabled={recordsDisabled}
-                                  style={{ width: 60 }}
-                                  title="Algorithm"
-                                />
-                                <input
-                                  type="number"
-                                  value={row.digestType || "2"}
-                                  onChange={(e) =>
-                                    handleUpdateRow(i, "digestType", e.target.value)
-                                  }
-                                  placeholder="2"
-                                  min={0}
-                                  disabled={recordsDisabled}
-                                  style={{ width: 60 }}
-                                  title="Digest Type"
-                                />
-                                <input
-                                  type="text"
-                                  value={row.value || ""}
-                                  onChange={(e) =>
-                                    handleUpdateRow(i, "value", e.target.value)
-                                  }
-                                  placeholder="Digest (hex)"
-                                  disabled={recordsDisabled}
-                                  style={{ flex: 1 }}
-                                  title="Digest"
-                                />
-                              </div>
-                            );
-                          case "HTTPS":
-                            return (
-                              <input
-                                type="text"
-                                value={row.value || ""}
-                                onChange={(e) =>
-                                  handleUpdateRow(i, "value", e.target.value)
-                                }
-                                placeholder="1 . alpn=h3,h2"
-                                disabled={recordsDisabled}
-                                style={{ width: "100%" }}
-                              />
-                            );
-                          case "SVCB":
-                            return (
-                              <input
-                                type="text"
-                                value={row.value || ""}
-                                onChange={(e) =>
-                                  handleUpdateRow(i, "value", e.target.value)
-                                }
-                                placeholder="1 target.example.com. alpn=h2"
-                                disabled={recordsDisabled}
-                                style={{ width: "100%" }}
-                              />
-                            );
-                          case "SSHFP":
-                            return (
-                              <input
-                                type="text"
-                                value={row.value || ""}
-                                onChange={(e) =>
-                                  handleUpdateRow(i, "value", e.target.value)
-                                }
-                                placeholder="1 1 123456789abcdef..."
-                                disabled={recordsDisabled}
-                                style={{ width: "100%" }}
-                              />
-                            );
-                          case "TLSA":
-                            return (
-                              <input
-                                type="text"
-                                value={row.value || ""}
-                                onChange={(e) =>
-                                  handleUpdateRow(i, "value", e.target.value)
-                                }
-                                placeholder="3 1 1 123456789abcdef..."
-                                disabled={recordsDisabled}
-                                style={{ width: "100%" }}
-                              />
-                            );
-                          case "LOC":
-                            return (
-                              <input
-                                type="text"
-                                value={row.value || ""}
-                                onChange={(e) =>
-                                  handleUpdateRow(i, "value", e.target.value)
-                                }
-                                placeholder="51 30 12.748 N 0 7 39.611 W 0.00m"
-                                disabled={recordsDisabled}
-                                style={{ width: "100%" }}
-                              />
-                            );
-                          case "NAPTR":
-                            return (
-                              <input
-                                type="text"
-                                value={row.value || ""}
-                                onChange={(e) =>
-                                  handleUpdateRow(i, "value", e.target.value)
-                                }
-                                placeholder='100 10 "U" "E2U+sip" "!^.*$!sip:info@example.com!" .'
-                                disabled={recordsDisabled}
-                                style={{ width: "100%" }}
-                              />
-                            );
-                          case "URI":
-                            return (
-                              <input
-                                type="text"
-                                value={row.value || ""}
-                                onChange={(e) =>
-                                  handleUpdateRow(i, "value", e.target.value)
-                                }
-                                placeholder='10 1 "https://example.com/path"'
-                                disabled={recordsDisabled}
-                                style={{ width: "100%" }}
-                              />
-                            );
-                          default:
-                            return (
-                              <input
-                                type="text"
-                                value={row.value || ""}
-                                onChange={(e) =>
-                                  handleUpdateRow(i, "value", e.target.value)
-                                }
-                                placeholder="Enter record data"
-                                disabled={recordsDisabled}
-                                style={{ width: "100%" }}
-                              />
-                            );
-                        }
-                      };
-
-                      return (
-                        <tr key={i}>
-                          <td>
-                            <select
-                              value={row.type}
-                              onChange={(e) =>
-                                handleUpdateRow(i, "type", e.target.value)
-                              }
-                              disabled={recordsDisabled}
-                            >
-                              <option value="A">A</option>
-                              <option value="AAAA">AAAA</option>
-                              <option value="CAA">CAA</option>
-                              <option value="CERT">CERT</option>
-                              <option value="CNAME">CNAME</option>
-                              <option value="DNSKEY">DNSKEY</option>
-                              <option value="DS">DS</option>
-                              <option value="HTTPS">HTTPS</option>
-                              <option value="LOC">LOC</option>
-                              <option value="MX">MX</option>
-                              <option value="NAPTR">NAPTR</option>
-                              <option value="OPENPGPKEY">OPENPGPKEY</option>
-                              <option value="PTR">PTR</option>
-                              <option value="SMIMEA">SMIMEA</option>
-                              <option value="SRV">SRV</option>
-                              <option value="SSHFP">SSHFP</option>
-                              <option value="SVCB">SVCB</option>
-                              <option value="TLSA">TLSA</option>
-                              <option value="TXT">TXT</option>
-                              <option value="URI">URI</option>
-                            </select>
-                          </td>
-                          <td>
-                            <input
-                              type="text"
-                              value={row.host || ""}
-                              onChange={(e) =>
-                                handleUpdateRow(i, "host", e.target.value)
-                              }
-                              placeholder="@"
-                              disabled={recordsDisabled}
-                            />
-                          </td>
-                          <td>{renderFields()}</td>
-                          <td>
-                            <button
-                              type="button"
-                              className="btn btn-ghost"
-                              onClick={() => handleDeleteRow(i)}
-                              disabled={recordsDisabled}
-                            >
-                              ✕
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                    {simple.records.length === 0 && (
-                      <tr>
-                        <td colSpan="4">
-                          <span className="muted">No DNS records yet.</span>
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
+              )}
 
               <button
                 type="button"
                 className="btn btn-secondary"
                 onClick={handleAddRow}
-                style={{ marginBottom: 16 }}
                 disabled={recordsDisabled}
               >
-                + Add record
+                <Icon name="plus" size={16} />
+                Add record
               </button>
 
-              <div style={{ marginTop: 12 }}>
-                <button
-                  className="btn btn-primary"
-                  type="submit"
-                  disabled={recordsDisabled}
-                >
-                  Save DNS changes
+              <div className="save-bar">
+                <button className="btn btn-primary" type="submit" disabled={recordsDisabled}>
+                  <Icon name="check" size={16} />
+                  Save changes
+                </button>
+                <span className="muted">Changes go live within minutes.</span>
+              </div>
+            </form>
+          )}
+
+          {tab === "nameservers" && (
+            <form onSubmit={handleSaveDelegation} className="card">
+              <div className="card-header">
+                <div>
+                  <h2>Nameservers</h2>
+                  <p className="muted">
+                    Choose where this domain's DNS is hosted. Changing this
+                    updates the <code>NS</code> records in the parent zone.
+                  </p>
+                </div>
+              </div>
+
+              <div className="choice-group">
+                <label className={`choice ${delegationMode === "internal" ? "selected" : ""}`}>
+                  <input
+                    type="radio"
+                    value="internal"
+                    checked={delegationMode === "internal"}
+                    onChange={() => setDelegationMode("internal")}
+                  />
+                  <span>
+                    <span className="choice-title">Anglican DNS (recommended)</span>
+                    <span className="choice-sub" style={{ display: "block" }}>
+                      Manage records right here — nothing else to set up.
+                    </span>
+                  </span>
+                </label>
+
+                <label className={`choice ${delegationMode === "external" ? "selected" : ""}`}>
+                  <input
+                    type="radio"
+                    value="external"
+                    checked={delegationMode === "external"}
+                    onChange={() => setDelegationMode("external")}
+                  />
+                  <span>
+                    <span className="choice-title">External DNS provider</span>
+                    <span className="choice-sub" style={{ display: "block" }}>
+                      Point the domain at nameservers you manage elsewhere.
+                    </span>
+                  </span>
+                </label>
+              </div>
+
+              {delegationMode === "external" && (
+                <label className="field">
+                  <span>External nameservers (one per line)</span>
+                  <textarea
+                    rows={4}
+                    value={externalNsText}
+                    onChange={(e) => setExternalNsText(e.target.value)}
+                    placeholder={"ns1.example.net.\nns2.example.net."}
+                  />
+                  <span className="hint">
+                    Use fully-qualified names ending with a dot, e.g.{" "}
+                    <code>ns1.example.net.</code>
+                  </span>
+                </label>
+              )}
+
+              <div className="save-bar">
+                <button className="btn btn-primary" type="submit">
+                  <Icon name="check" size={16} />
+                  Save nameservers
                 </button>
               </div>
             </form>
@@ -1048,26 +836,205 @@ export default function ZonePage({ token, zoneName, onBack, isAdminEdit = false 
 
           {tab === "advanced" && (
             <form onSubmit={handleSaveAdvanced} className="card">
-              <h3>Advanced JSON editor</h3>
-              <p className="muted">
-                Full PowerDNS RRset JSON. Only use this if you know what you’re
-                doing. Changes here will overwrite A / CNAME / MX edits.
-              </p>
+              <div className="card-header">
+                <div>
+                  <h2>Advanced JSON editor</h2>
+                  <p className="muted">
+                    Full RRset JSON for power users. Saving here overwrites
+                    changes made in the Records tab.
+                  </p>
+                </div>
+              </div>
               <textarea
                 className="code-area"
                 rows={20}
                 value={rrsetsText}
                 onChange={(e) => setRrsetsText(e.target.value)}
                 disabled={recordsDisabled}
+                spellCheck={false}
               />
-              <button
-                className="btn btn-secondary"
-                type="submit"
-                disabled={recordsDisabled}
-              >
-                Save (advanced)
-              </button>
+              <div className="save-bar">
+                <button className="btn btn-secondary" type="submit" disabled={recordsDisabled}>
+                  Save JSON
+                </button>
+              </div>
             </form>
+          )}
+
+          {tab === "sharing" && access && (
+            <div className="card">
+              <div className="card-header">
+                <div>
+                  <h2>Who can manage this zone</h2>
+                  <p className="muted">
+                    {isAdminEdit
+                      ? "Everyone linked to this zone. You can add managers, remove them, or transfer ownership."
+                      : access.is_owner
+                      ? "As the owner you can invite other registered users to manage records with you, or hand ownership to one of them."
+                      : "Only the zone owner can change who has access."}
+                  </p>
+                </div>
+              </div>
+
+              <div className="snap-list">
+                <div className="snap-item">
+                  <div className="snap-info">
+                    <div className="snap-when">{access.owner_email || "Unassigned"}</div>
+                    <div className="snap-meta">Owner</div>
+                  </div>
+                  <Chip tone="teal">owner</Chip>
+                </div>
+                {access.managers.map((m) => (
+                  <div key={m.id} className="snap-item">
+                    <div className="snap-info">
+                      <div className="snap-when">{m.email}</div>
+                      <div className="snap-meta">Manager</div>
+                    </div>
+                    {access.is_owner && (
+                      <div className="row-actions">
+                        <button className="btn btn-secondary btn-sm" onClick={() => handleTransferOwner(m)} title="Transfer ownership to this user">
+                          <Icon name="key" size={14} />
+                          Make owner
+                        </button>
+                        <button className="btn btn-danger btn-sm" onClick={() => handleRemoveManager(m)}>
+                          <Icon name="x" size={14} />
+                          Remove
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+                {access.managers.length === 0 && (
+                  <p className="muted">No additional managers yet.</p>
+                )}
+              </div>
+
+              {access.is_owner && (
+                <form onSubmit={handleAddManager} className="save-bar" style={{ alignItems: "flex-end" }}>
+                  <label className="field" style={{ marginBottom: 0, flex: 1, maxWidth: 320 }}>
+                    <span>Add a manager by email</span>
+                    <input
+                      type="email"
+                      value={managerEmail}
+                      onChange={(e) => setManagerEmail(e.target.value)}
+                      placeholder="colleague@parish.org"
+                      required
+                    />
+                  </label>
+                  <button className="btn btn-primary" type="submit">
+                    <Icon name="plus" size={16} />
+                    Add manager
+                  </button>
+                </form>
+              )}
+            </div>
+          )}
+
+          {tab === "snapshots" && isAdminEdit && (
+            <div className="card">
+              <div className="card-header">
+                <div>
+                  <h2>Snapshots</h2>
+                  <p className="muted">
+                    A snapshot is taken automatically before every change.
+                    Restore one to roll the zone back.
+                  </p>
+                </div>
+              </div>
+              {snapshots.length === 0 ? (
+                <EmptyState icon="history" title="No snapshots yet">
+                  Snapshots will appear here after the first change to this zone.
+                </EmptyState>
+              ) : (
+                <div className="snap-list">
+                  {snapshots.map((snap) => {
+                    const diffState = snapDiffs[snap.id];
+                    const isOpen = openSnap === snap.id;
+                    return (
+                      <div key={snap.id}>
+                        <div className="snap-item" style={isOpen ? { borderBottomLeftRadius: 0, borderBottomRightRadius: 0 } : undefined}>
+                          <div className="snap-info">
+                            <div className="snap-when">
+                              {new Date(snap.created_at).toLocaleString("en-GB", {
+                                year: "numeric",
+                                month: "short",
+                                day: "numeric",
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              })}
+                            </div>
+                            <div className="snap-meta">
+                              {snap.record_count} record sets
+                              {snap.reason ? ` · ${snap.reason}` : ""}
+                              {snap.email ? ` · by ${snap.email}` : ""}
+                            </div>
+                          </div>
+                          <div className="row-actions">
+                            <button className="btn btn-ghost btn-sm" onClick={() => toggleSnapshotDiff(snap)}>
+                              <Icon name="chevronRight" size={15} className={`log-chev ${isOpen ? "open" : ""}`} />
+                              What changed
+                            </button>
+                            <button className="btn btn-secondary btn-sm" onClick={() => handleRestoreSnapshot(snap)}>
+                              <Icon name="history" size={15} />
+                              Restore
+                            </button>
+                          </div>
+                        </div>
+                        {isOpen && (
+                          <div className="log-detail" style={{ margin: "0 0 0.6rem", borderTopLeftRadius: 0, borderTopRightRadius: 0 }}>
+                            {(!diffState || diffState.loading) && <p className="muted">Loading snapshot…</p>}
+                            {diffState && diffState.error && <p className="muted">Couldn't load snapshot: {diffState.error}</p>}
+                            {diffState && diffState.diff && (
+                              diffState.diff.added.length === 0 &&
+                              diffState.diff.removed.length === 0 &&
+                              diffState.diff.changed.length === 0 ? (
+                                <p className="muted">Identical to the current records — restoring changes nothing.</p>
+                              ) : (
+                                <>
+                                  <p className="muted" style={{ marginBottom: "0.5rem" }}>
+                                    Differences between this snapshot and the current records
+                                    (restoring reverses them):
+                                  </p>
+                                  <ul className="diff-list">
+                                    {diffState.diff.added.map((rr, i) => (
+                                      <li key={`a${i}`}>
+                                        <span className="diff-mark add">+</span>
+                                        <code>{rr.type}</code> <code>{rr.name}</code>{" "}
+                                        {(rr.records || []).map((r) => r.content).join(", ")}
+                                        <span className="muted"> (TTL {rr.ttl}) — added since</span>
+                                      </li>
+                                    ))}
+                                    {diffState.diff.changed.map((c, i) => (
+                                      <li key={`c${i}`}>
+                                        <span className="diff-mark mod">±</span>
+                                        <code>{c.before.type}</code> <code>{c.before.name}</code>{" "}
+                                        <span className="muted">
+                                          {(c.before.records || []).map((r) => r.content).join(", ")} (TTL {c.before.ttl})
+                                        </span>{" "}
+                                        → {(c.after.records || []).map((r) => r.content).join(", ")}{" "}
+                                        <span className="muted">(TTL {c.after.ttl})</span>
+                                      </li>
+                                    ))}
+                                    {diffState.diff.removed.map((rr, i) => (
+                                      <li key={`r${i}`}>
+                                        <span className="diff-mark del">−</span>
+                                        <code>{rr.type}</code> <code>{rr.name}</code>{" "}
+                                        {(rr.records || []).map((r) => r.content).join(", ")}
+                                        <span className="muted"> (TTL {rr.ttl}) — removed since</span>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </>
+                              )
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           )}
         </>
       )}

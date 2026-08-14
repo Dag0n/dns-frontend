@@ -1,6 +1,178 @@
 // src/components/AuditLog.jsx
 import { useEffect, useState } from "react";
 import { apiRequest } from "../api";
+import { Icon, Alert, Loading, EmptyState, Chip } from "./ui.jsx";
+
+const ACTION_LABELS = {
+  create_zone: "Created Zone",
+  delete_zone: "Deleted Zone",
+  assign_zone: "Assigned Zone",
+  remove_zone_manager: "Removed Manager",
+  update_zone_records: "Updated Records",
+  update_zone_delegation: "Updated Delegation",
+  approve_request: "Approved Request",
+  deny_request: "Denied Request",
+  grant_admin: "Granted Admin",
+  revoke_admin: "Revoked Admin",
+  delete_user: "Deleted User",
+  password_reset_sent: "Sent Password Reset",
+  transfer_zone_owner: "Transferred Ownership",
+  enable_mfa: "Enabled MFA",
+  disable_mfa: "Disabled MFA",
+  register: "Registered",
+  login: "Signed In",
+  login_failed: "Failed Sign-In",
+  login_mfa_failed: "Failed MFA Code",
+  request_created: "Requested Zone",
+  request_updated: "Updated Request",
+  request_cancelled: "Withdrew Request",
+  add_zone_manager: "Added Manager",
+  restore_zone_snapshot: "Restored Snapshot",
+  import_zones: "Imported Zones",
+  claim_zone: "Claimed Zone",
+  claim_failed: "Failed Claim",
+  ticket_created: "Opened Ticket",
+  ticket_replied: "Ticket Reply",
+  ticket_closed: "Closed Ticket",
+  password_reset_requested: "Password Reset Requested",
+  reset_mfa: "Reset MFA",
+  pdns_sync: "DNS Sync",
+  notify_secondaries: "Notified Secondaries",
+};
+
+const formatAction = (action) => ACTION_LABELS[action] || action;
+
+const getActionTone = (action) => {
+  if (action.includes("fail") || action.includes("delete") || action.includes("deny") || action.includes("revoke")) {
+    return "rose";
+  }
+  if (action.includes("create") || action.includes("approve") || action.includes("grant") || action.includes("restore")) {
+    return "green";
+  }
+  return "gray";
+};
+
+function parseDetails(details) {
+  if (!details) return null;
+  try {
+    return JSON.parse(details);
+  } catch {
+    return { raw: details };
+  }
+}
+
+// One rrset in a change diff, e.g. `A www.stmarys.anglican.site. → 192.0.2.1 (TTL 300)`
+function RrsetLine({ entry, prefix }) {
+  if (entry.truncated) return <li className="muted">…and more (truncated)</li>;
+  return (
+    <li>
+      <span className={`diff-mark ${prefix === "+" ? "add" : prefix === "−" ? "del" : "mod"}`}>{prefix}</span>
+      <code>{entry.type}</code> <code>{entry.name}</code>
+      {entry.before ? (
+        <>
+          {" "}
+          <span className="muted">
+            {entry.before.records.join(", ") || "—"} (TTL {entry.before.ttl})
+          </span>{" "}
+          → {entry.after.records.join(", ") || "—"}{" "}
+          <span className="muted">(TTL {entry.after.ttl})</span>
+        </>
+      ) : (
+        <>
+          {" "}
+          {entry.records && entry.records.length > 0 ? entry.records.join(", ") : ""}
+          {entry.ttl != null && <span className="muted"> (TTL {entry.ttl})</span>}
+        </>
+      )}
+    </li>
+  );
+}
+
+function ChangeDetails({ changes }) {
+  const added = changes.added || [];
+  const removed = changes.removed || [];
+  const changed = changes.changed || [];
+  return (
+    <ul className="diff-list">
+      {added.map((c, i) => <RrsetLine key={`a${i}`} entry={c} prefix="+" />)}
+      {changed.map((c, i) => <RrsetLine key={`c${i}`} entry={c} prefix="±" />)}
+      {removed.map((c, i) => <RrsetLine key={`r${i}`} entry={c} prefix="−" />)}
+    </ul>
+  );
+}
+
+function summarizeChanges(changes) {
+  const parts = [];
+  const count = (list, word) => {
+    const real = (list || []).filter((c) => !c.truncated).length;
+    if (real > 0) parts.push(`${real} ${word}`);
+  };
+  count(changes.added, "added");
+  count(changes.changed, "changed");
+  count(changes.removed, "removed");
+  return parts.join(" · ") || "no record changes";
+}
+
+function simpleSummary(parsed) {
+  return Object.entries(parsed)
+    .filter(([key]) => key !== "changes")
+    .map(([key, value]) => (Array.isArray(value) ? `${key}: ${value.join(", ")}` : `${key}: ${value}`))
+    .join(", ");
+}
+
+function LogEntry({ log }) {
+  const [open, setOpen] = useState(false);
+  const parsed = parseDetails(log.details);
+  const changes = parsed && parsed.changes;
+  const hasDiff =
+    changes &&
+    ((changes.added && changes.added.length) ||
+      (changes.removed && changes.removed.length) ||
+      (changes.changed && changes.changed.length));
+
+  return (
+    <div className="log-item">
+      <div
+        className={`log-row ${hasDiff ? "expandable" : ""}`}
+        onClick={hasDiff ? () => setOpen(!open) : undefined}
+        role={hasDiff ? "button" : undefined}
+        tabIndex={hasDiff ? 0 : undefined}
+        onKeyDown={hasDiff ? (e) => (e.key === "Enter" || e.key === " ") && setOpen(!open) : undefined}
+      >
+        <div className="log-main">
+          <div className="log-line1">
+            <Chip tone={getActionTone(log.action)}>{formatAction(log.action)}</Chip>
+            {log.target_id && <code className="log-target">{log.target_id}</code>}
+            {hasDiff && <span className="chip chip-teal">{summarizeChanges(changes)}</span>}
+          </div>
+          <div className="log-line2">
+            {log.email}
+            {log.ip && <> · {log.ip}</>}
+            {parsed && !hasDiff && simpleSummary(parsed) && <> · {simpleSummary(parsed)}</>}
+          </div>
+        </div>
+        <div className="log-side">
+          <span className="log-date">
+            {new Date(log.created_at).toLocaleString("en-GB", {
+              month: "short",
+              day: "numeric",
+              hour: "2-digit",
+              minute: "2-digit",
+            })}
+          </span>
+          {hasDiff && (
+            <Icon name="chevronRight" size={16} className={`log-chev ${open ? "open" : ""}`} />
+          )}
+        </div>
+      </div>
+      {open && hasDiff && (
+        <div className="log-detail">
+          <ChangeDetails changes={changes} />
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function AuditLog({ token, isAdmin }) {
   const [logs, setLogs] = useState([]);
@@ -32,49 +204,6 @@ export default function AuditLog({ token, isAdmin }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [offset]);
 
-  const formatAction = (action) => {
-    const actionMap = {
-      create_zone: "Created Zone",
-      delete_zone: "Deleted Zone",
-      assign_zone: "Assigned Zone",
-      remove_zone_manager: "Removed Manager",
-      update_zone_records: "Updated Records",
-      update_zone_delegation: "Updated Delegation",
-      approve_request: "Approved Request",
-      deny_request: "Denied Request",
-      grant_admin: "Granted Admin",
-      revoke_admin: "Revoked Admin",
-    };
-    return actionMap[action] || action;
-  };
-
-  const formatDetails = (details) => {
-    if (!details) return null;
-    try {
-      const parsed = JSON.parse(details);
-      return Object.entries(parsed)
-        .map(([key, value]) => {
-          if (Array.isArray(value)) {
-            return `${key}: ${value.join(", ")}`;
-          }
-          return `${key}: ${value}`;
-        })
-        .join(", ");
-    } catch {
-      return details;
-    }
-  };
-
-  const getActionColor = (action) => {
-    if (action.includes("create") || action.includes("approve") || action.includes("grant")) {
-      return "approved";
-    }
-    if (action.includes("delete") || action.includes("deny") || action.includes("revoke")) {
-      return "denied";
-    }
-    return "pending";
-  };
-
   const canGoNext = offset + limit < total;
   const canGoPrev = offset > 0;
 
@@ -82,123 +211,63 @@ export default function AuditLog({ token, isAdmin }) {
     <div className="admin-page">
       <div className="page-header">
         <div>
-          <h1>Audit Log</h1>
+          <h1>Activity</h1>
           <p className="muted">
             {isAdmin
-              ? "View all system activity and changes"
-              : "View activity for your zones"}
+              ? "All system activity and changes."
+              : "Activity for your zones."}
           </p>
         </div>
       </div>
 
-      {loading && (
-        <div className="loading-state">
-          <svg className="spinner" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
-          </svg>
-          <p>Loading audit log...</p>
-        </div>
-      )}
-
-      {error && <div className="error">{error}</div>}
+      {loading && <Loading label="Loading activity…" />}
+      <Alert type="error">{error}</Alert>
 
       {!loading && (
         <div className="card">
           <div className="card-header">
             <div>
-              <h2>Activity Log</h2>
+              <h2>Log</h2>
               <p className="muted">
-                Showing {offset + 1}-{Math.min(offset + limit, total)} of {total}{" "}
-                entries
+                {total === 0
+                  ? "No entries"
+                  : `Showing ${offset + 1}–${Math.min(offset + limit, total)} of ${total}. Entries with record changes expand to show the full diff.`}
               </p>
             </div>
           </div>
 
           {logs.length === 0 ? (
-            <div className="empty-state">
-              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                <polyline points="14 2 14 8 20 8"/>
-              </svg>
-              <h3>No activity yet</h3>
-              <p className="muted">Activity will appear here when actions are performed</p>
-            </div>
+            <EmptyState icon="history" title="No activity yet">
+              Activity will appear here when actions are performed.
+            </EmptyState>
           ) : (
             <>
-              <div className="table-wrapper">
-                <table className="zones-table">
-                  <thead>
-                    <tr>
-                      <th>Action</th>
-                      <th>Target</th>
-                      <th>User</th>
-                      <th>Details</th>
-                      <th>Date</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {logs.map((log) => (
-                      <tr key={log.id}>
-                        <td>
-                          <span className={`request-status ${getActionColor(log.action)}`}>
-                            {formatAction(log.action)}
-                          </span>
-                        </td>
-                        <td>
-                          <code style={{ fontSize: "13px" }}>{log.target_id || "-"}</code>
-                        </td>
-                        <td>{log.email}</td>
-                        <td style={{ fontSize: "13px", color: "var(--muted)" }}>
-                          {formatDetails(log.details) || "-"}
-                        </td>
-                        <td>
-                          {new Date(log.created_at).toLocaleString("en-US", {
-                            year: "numeric",
-                            month: "short",
-                            day: "numeric",
-                            hour: "2-digit",
-                            minute: "2-digit",
-                          })}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div className="log-list">
+                {logs.map((log) => (
+                  <LogEntry key={log.id} log={log} />
+                ))}
               </div>
 
-              {/* Pagination */}
               {total > limit && (
-                <div style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  marginTop: "var(--space-lg)",
-                  paddingTop: "var(--space-lg)",
-                  borderTop: "1px solid var(--border-color)"
-                }}>
+                <div className="pager">
                   <button
-                    className="btn btn-secondary"
+                    className="btn btn-secondary btn-sm"
                     onClick={() => setOffset(Math.max(0, offset - limit))}
                     disabled={!canGoPrev}
                   >
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <polyline points="15 18 9 12 15 6"/>
-                    </svg>
+                    <Icon name="chevronLeft" size={15} />
                     Previous
                   </button>
                   <span className="muted">
-                    Page {Math.floor(offset / limit) + 1} of{" "}
-                    {Math.ceil(total / limit)}
+                    Page {Math.floor(offset / limit) + 1} of {Math.ceil(total / limit)}
                   </span>
                   <button
-                    className="btn btn-secondary"
+                    className="btn btn-secondary btn-sm"
                     onClick={() => setOffset(offset + limit)}
                     disabled={!canGoNext}
                   >
                     Next
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <polyline points="9 18 15 12 9 6"/>
-                    </svg>
+                    <Icon name="chevronRight" size={15} />
                   </button>
                 </div>
               )}
