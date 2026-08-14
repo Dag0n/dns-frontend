@@ -30,7 +30,9 @@ const CFG = {
   PDNS_API_KEY: env("PDNS_API_KEY", ""),
 
   // Staging: anglican.site. Later change to anglican.org.
-  PARENT_DOMAIN: env("PARENT_DOMAIN", "anglican.site"),
+  // Lowercased so suffix checks against normalized zone names can't be
+  // broken by a badly-cased env var.
+  PARENT_DOMAIN: env("PARENT_DOMAIN", "anglican.site").toLowerCase(),
   // Public NS records of the parent zone (comma-separated, trailing dots)
   DEFAULT_NAMESERVERS: env("DEFAULT_NAMESERVERS", "ns2.he.net.,ns3.he.net.,ns4.he.net.,ns5.he.net.")
     .split(",")
@@ -756,6 +758,40 @@ function requireAdmin(e) {
   return !!(e.auth && e.auth.getBool("is_admin"));
 }
 
+// Normalize and validate a user-supplied zone name: trim, lowercase, strip a
+// single trailing dot (FQDN form), then enforce RFC-style label rules. The
+// zones.name unique index is case-sensitive, so un-normalized names would
+// allow duplicate zones that the PDNS reconcile then skips. Returns
+// { name } on success or { error } on failure; callers still perform the
+// parent-domain suffix check and conflict checks on the returned name.
+function normalizeZoneName(raw) {
+  let name = String(raw == null ? "" : raw).trim().toLowerCase();
+  if (name.endsWith(".")) name = name.slice(0, -1);
+  if (!name) return { error: "zone name required" };
+  if (name.length > 253) return { error: "zone name too long (max 253 characters)" };
+  for (const label of name.split(".")) {
+    if (!/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(label)) {
+      return {
+        error:
+          "invalid zone name: labels may contain a-z, 0-9 and hyphens (1-63 chars, no leading/trailing hyphen)",
+      };
+    }
+  }
+  return { name: name };
+}
+
+// Guard for the onRecord*Request("users") hooks in main.pb.js: privileged
+// fields may only change through the custom routes (which call $app.save()
+// directly and never pass through these request hooks).
+function assertNoPrivilegedUserFields(e) {
+  const body = e.requestInfo().body || {};
+  for (const f of ["is_admin", "verified", "mfa_enabled", "mfa_secret"]) {
+    if (f in body) {
+      throw new ForbiddenError("field '" + f + "' cannot be set via the record API");
+    }
+  }
+}
+
 // App zones must not nest inside one another: scoping is by name suffix, so
 // nested zones would BOTH control the same records - and a save from the
 // outer zone would silently delete the inner zone's records (its rrsets are
@@ -965,6 +1001,8 @@ module.exports = {
   applyRecordUpdate: applyRecordUpdate,
   applyDelegation: applyDelegation,
   requireAdmin: requireAdmin,
+  normalizeZoneName: normalizeZoneName,
+  assertNoPrivilegedUserFields: assertNoPrivilegedUserFields,
   findConflictingZone: findConflictingZone,
   requireVerifiedEmail: requireVerifiedEmail,
   findZoneByName: findZoneByName,

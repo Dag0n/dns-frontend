@@ -392,3 +392,14 @@ chmod +x /etc/cron.daily/pdns-backup
       Settings → Application
 - [ ] S3 off-site backups configured and tested (do one restore drill)
 - [ ] SSH: key-only auth, `PasswordAuthentication no`
+- [ ] **One-time after deploying the users-API lockdown** (migration
+      `1755156000_lock_users_rules`): audit for prior self-elevation — every
+      row from
+      `sqlite3 /opt/dns-manager/pb_data/data.db "SELECT id,email,is_admin,created FROM users WHERE is_admin=1;"`
+      must be a known admin (before the lockdown, any authenticated user
+      could set their own `is_admin` via the built-in record API). Also check
+      for legacy names the new zone-name normalization would reject:
+      `SELECT name FROM zones WHERE name != lower(trim(name));` and the same
+      for `zone_requests.zone_name` — fix any hits manually via the
+      dashboard (do not mass-rename zones blindly; renames trigger PDNS
+      sync)

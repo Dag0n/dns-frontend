@@ -175,6 +175,10 @@ header.
 - `email` (unique) with bcrypt-hashed password managed by PocketBase
 - `is_admin`: admin flag
 - `mfa_enabled`, `mfa_secret` (hidden): TOTP second factor
+- All API rules (list/view/create/update/delete **and** the authentication
+  rule) are locked to superuser-only by migration: registration, login and
+  profile access happen exclusively through the custom `/auth/*` and
+  `/admin/users/*` routes
 
 ### zones
 - `name`: zone name (e.g. `parish.anglican.site`), unique
@@ -233,8 +237,10 @@ the Activity page renders it as an expandable per-entry diff.
   months, always keeping each zone's most recent snapshot as a last restore
   point.
 
-All collection API rules are locked (superuser-only); access goes exclusively
-through the custom routes, which enforce the app's permission model.
+All collection API rules are locked (superuser-only), including the `users`
+auth collection; access goes exclusively through the custom routes, which
+enforce the app's permission model. Only PocketBase's token-gated email
+confirmation endpoints (verification, password reset) remain built-in.
 
 ## Auditing, backups & rollback
 
@@ -263,7 +269,16 @@ through the custom routes, which enforce the app's permission model.
   drops the session and returns to the login page on any 401 (expired or
   revoked token) and revalidates the cached user via `/auth/me` on load
 - Passwords are hashed with bcrypt by PocketBase; TOTP MFA available
-  per-user, with admin-driven reset for lost devices
+  per-user, with admin-driven reset for lost devices. TOTP codes are
+  compared in constant time
+- The built-in users record + auth API is locked to superusers, so the
+  TOTP check in `POST /auth/login` cannot be bypassed via
+  `auth-with-password`, and privileged fields (`is_admin`, `verified`,
+  `mfa_*`) cannot be set through the record API. Request hooks guard both
+  as defense in depth even if a rule is ever relaxed
+- Zone names are normalized (trimmed, lowercased, trailing dot stripped)
+  and validated against RFC-style label rules before the parent-domain
+  suffix and overlap checks
 - Email verification is enforced for zone claiming and access requests
   whenever SMTP is enabled (the first registered user — the bootstrap
   admin — is auto-verified)

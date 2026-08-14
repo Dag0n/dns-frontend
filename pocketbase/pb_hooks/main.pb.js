@@ -266,8 +266,9 @@ routerAdd("POST", "/admin/zones/assign", (e) => {
   if (!u.requireAdmin(e)) return e.json(403, { error: "Admin only" });
 
   const body = e.requestInfo().body || {};
-  const zoneName = body.zoneName;
-  if (!zoneName) return e.json(400, { error: "zoneName required" });
+  const norm = u.normalizeZoneName(body.zoneName);
+  if (norm.error) return e.json(400, { error: norm.error });
+  const zoneName = norm.name;
 
   const emails = Array.isArray(body.email) ? body.email : [body.email];
   if (emails.length === 0 || emails.some((x) => !x)) {
@@ -313,8 +314,9 @@ routerAdd("POST", "/admin/zones/create", (e) => {
   if (!u.requireAdmin(e)) return e.json(403, { error: "Admin only" });
 
   const body = e.requestInfo().body || {};
-  const zoneName = body.zoneName;
-  if (!zoneName) return e.json(400, { error: "zoneName required" });
+  const norm = u.normalizeZoneName(body.zoneName);
+  if (norm.error) return e.json(400, { error: norm.error });
+  const zoneName = norm.name;
 
   const emails = Array.isArray(body.email) ? body.email : [body.email];
   if (emails.length === 0 || emails.some((x) => !x)) {
@@ -669,9 +671,11 @@ routerAdd("PUT", "/zones/{name}/delegation", (e) => {
 routerAdd("POST", "/requests/create", (e) => {
   const u = require(`${__hooks}/utils.js`);
   const body = e.requestInfo().body || {};
-  const zoneName = body.zoneName;
+  const norm = u.normalizeZoneName(body.zoneName);
+  if (norm.error) return e.json(400, { error: norm.error });
+  const zoneName = norm.name;
   const reason = body.reason;
-  if (!zoneName || !reason) {
+  if (!reason) {
     return e.json(400, { error: "zoneName and reason required" });
   }
 
@@ -757,9 +761,11 @@ routerAdd("PUT", "/requests/{id}", (e) => {
   }
 
   const body = e.requestInfo().body || {};
-  const zoneName = (body.zoneName || "").trim();
+  const norm = u.normalizeZoneName(body.zoneName);
+  if (norm.error) return e.json(400, { error: norm.error });
+  const zoneName = norm.name;
   const reason = (body.reason || "").trim();
-  if (!zoneName || !reason) {
+  if (!reason) {
     return e.json(400, { error: "zoneName and reason required" });
   }
   if (!zoneName.endsWith("." + u.CFG.PARENT_DOMAIN) && zoneName !== u.CFG.PARENT_DOMAIN) {
@@ -880,7 +886,16 @@ routerAdd("POST", "/admin/requests/{id}/approve", (e) => {
   }
   if (!user) return e.json(400, { error: "user not found" });
 
-  const zoneName = request.getString("zone_name");
+  // Re-validate the stored name: legacy rows predate normalization, and
+  // PARENT_DOMAIN may have changed between filing and approval.
+  const norm = u.normalizeZoneName(request.getString("zone_name"));
+  if (norm.error) {
+    return e.json(400, { error: "stored zone name is invalid: " + norm.error });
+  }
+  const zoneName = norm.name;
+  if (!zoneName.endsWith("." + u.CFG.PARENT_DOMAIN) && zoneName !== u.CFG.PARENT_DOMAIN) {
+    return e.json(400, { error: `zone must be subdomain of ${u.CFG.PARENT_DOMAIN}` });
+  }
   if (u.findZoneByName(zoneName)) {
     return e.json(400, { error: "zone already exists in DB" });
   }
@@ -1803,6 +1818,35 @@ routerAdd("POST", "/admin/zones/{name}/snapshots/{id}/restore", (e) => {
     return e.json(500, { error: err.message });
   }
 }, $apis.requireAuth("users"));
+
+// ---------- USERS COLLECTION GUARDS ----------
+
+// Belt-and-braces on top of the locked users API rules (see the
+// lock_users_rules migration): even if a rule is ever relaxed, the raw
+// record API can never set privileged fields, and password auth must go
+// through POST /auth/login so the TOTP check cannot be bypassed. These
+// *Request hooks fire only for the built-in /api/collections endpoints,
+// never for the $app.save() calls the custom routes use. Superusers are
+// exempt so the PocketBase dashboard stays fully usable.
+onRecordCreateRequest((e) => {
+  if (!e.hasSuperuserAuth()) {
+    const u = require(`${__hooks}/utils.js`);
+    u.assertNoPrivilegedUserFields(e);
+  }
+  e.next();
+}, "users");
+
+onRecordUpdateRequest((e) => {
+  if (!e.hasSuperuserAuth()) {
+    const u = require(`${__hooks}/utils.js`);
+    u.assertNoPrivilegedUserFields(e);
+  }
+  e.next();
+}, "users");
+
+onRecordAuthWithPasswordRequest((e) => {
+  throw new ForbiddenError("use POST /auth/login");
+}, "users");
 
 // ---------- PDNS SYNC (PocketBase is the source of truth) ----------
 

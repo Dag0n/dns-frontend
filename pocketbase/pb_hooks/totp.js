@@ -148,16 +148,25 @@ function otpauthUri(secret, email, issuer) {
 }
 
 // Verify a 6-digit code against the base32 secret, allowing +/- one
-// 30-second step of clock drift.
+// 30-second step of clock drift. Comparison is constant-time and checks
+// every window (no early exit); a corrupt/empty secret counts as a
+// failed verification rather than a thrown error.
 function verify(secretB32, code) {
   const cleaned = String(code || "").replace(/\s/g, "");
   if (!/^\d{6}$/.test(cleaned)) return false;
-  const secretBytes = base32Decode(secretB32);
-  const counter = Math.floor(Date.now() / 1000 / 30);
-  for (let w = -1; w <= 1; w++) {
-    if (hotpCode(secretBytes, counter + w) === cleaned) return true;
+  let secretBytes;
+  try {
+    secretBytes = base32Decode(secretB32);
+  } catch (_) {
+    return false;
   }
-  return false;
+  if (secretBytes.length === 0) return false;
+  const counter = Math.floor(Date.now() / 1000 / 30);
+  let ok = false;
+  for (let w = -1; w <= 1; w++) {
+    if ($security.equal(hotpCode(secretBytes, counter + w), cleaned)) ok = true;
+  }
+  return ok;
 }
 
 module.exports = {
